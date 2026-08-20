@@ -16,7 +16,9 @@ The site stays static — no Next.js, no build step.
 | Plan changes | `POST /api/plan-change` | done |
 | ClickUp provisioning | `POST /api/clickup/provision` | done, **untested against ClickUp** |
 
-The three "untested" rows need live credentials — see *Still needed* below.
+The three "untested" rows are written and reviewed but have never run against a
+live API, because no Square credentials or ClickUp API token exist yet. Treat
+them as unverified until they have.
 
 ## Setup
 
