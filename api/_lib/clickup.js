@@ -91,12 +91,33 @@ export async function provisionClient(db, subscriptionId) {
   const templateId = process.env.CLICKUP_FOLDER_TEMPLATE_ID;
 
   if (templateId) {
-    // Preferred path, once "Client Template Folder" is saved as a Folder
-    // Template in ClickUp. Brings the whole structure across.
+    // Preferred path: "Client Template Folder" saved as a Folder Template
+    // in ClickUp. Brings the whole structure across in one call.
     const created = await clickup(`/space/${spaceId}/folder_template/${templateId}`, {
       method: "POST",
-      body: JSON.stringify({ name: clientName }),
+      body: JSON.stringify({
+        name: clientName,
+        options: {
+          /* Defaults to true, which returns a folder id before the nested
+             lists and tasks exist — we would then hand the client a link
+             to an empty folder. Wait for the structure to be built. */
+          return_immediately: false,
+          include_views: true,
+          content: true,
+          subtasks: true,
+          old_statuses: true,
+          automation: true,
+          /* Template tasks carry the dates and assignees of whoever built
+             the template; those are meaningless on a new client and would
+             show up as overdue on day one. */
+          old_due_date: false,
+          old_start_date: false,
+          old_assignees: false,
+          old_followers: false,
+        },
+      }),
     });
+    // The response carries both a top-level `id` and a `folder` object.
     folder = created.folder ?? created;
   } else {
     // Fallback: build the folder and only the lists this path needs.

@@ -20,8 +20,9 @@ The three "untested" rows need live credentials — see *Still needed* below.
 
 ## Setup
 
-1. **Create the Supabase project** (`lpm-portal`, separate from PropDoc's).
-   Apply `supabase/migrations/0001_portal_init.sql`.
+1. **Create the Supabase project** (`lpm-portal`, separate from PropDoc's), then
+   send me the project ref and I'll apply
+   `supabase/migrations/0001_portal_init.sql` and verify RLS.
 
 2. **Set the Vercel env vars** listed in `.env.example`. Secrets
    (`SUPABASE_SERVICE_ROLE_KEY`, `SQUARE_ACCESS_TOKEN`, `CLICKUP_API_TOKEN`,
@@ -86,8 +87,9 @@ editor — no UI.
 - There is no "duplicate this folder" endpoint. The API can only create a folder
   from a *saved Folder Template*. `Client Template Folder` (`901318206130`) is a
   plain folder, so it can't be a duplication source until it's saved as a
-  template in the ClickUp UI. Set `CLICKUP_FOLDER_TEMPLATE_ID` once it is; until
-  then provisioning builds the folder and only the lists the package path needs.
+  template in the ClickUp UI (**this is the chosen approach** — see below).
+  With `CLICKUP_FOLDER_TEMPLATE_ID` unset, provisioning falls back to building
+  the folder and only the lists the package path needs.
 - Dashboards aren't in the public API at all. `clickup_dashboard_url` currently
   holds the client's **folder** URL, which is the closest shareable equivalent.
 
@@ -95,3 +97,32 @@ editor — no UI.
 full rendered text is stored, not a boolean — including the "pending Michael's
 confirmation" disclaimers, since those were part of what the client was shown.
 That flag is still in the UI and stays until you say otherwise.
+
+## Getting the ClickUp Folder Template ID
+
+Save `Client Template Folder` as a Folder Template in the ClickUp UI, then:
+
+```bash
+curl -s -H "Authorization: $CLICKUP_API_TOKEN" https://api.clickup.com/api/v2/team/90132069393/folder_template
+```
+
+Take the `t-`-prefixed id of the template you just saved and set it as
+`CLICKUP_FOLDER_TEMPLATE_ID` in Vercel. Pass the full id including the prefix.
+
+Provisioning calls the template with `return_immediately: false` on purpose:
+the default is `true`, which returns a folder id before the nested lists exist,
+and the client would get a link to an empty folder. It also suppresses the
+template author's due dates, start dates, assignees and followers, which would
+otherwise land on a new client's board looking overdue on day one.
+
+## Confirmed decisions
+
+- **Launch path billing** — the one-time Launch fee is charged at checkout, and
+  the recurring Orbit + Pods retainer starts one month later. The client is not
+  billed a retainer for a show that isn't in production yet.
+- **Square** — build and verify against sandbox, then flip `SQUARE_ENV` to
+  `production` at launch. Nothing else changes between the two.
+- **ClickUp** — folder template is the intended path; the explicit list builder
+  stays as the fallback.
+- **Admin tooling / promo UI** — none for v1, by decision. Supabase's table
+  editor plus ClickUp directly is the admin surface.
