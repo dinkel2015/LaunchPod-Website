@@ -11,14 +11,17 @@ The site stays static — no Next.js, no build step.
 | Auth | Supabase Auth REST, called from `portal.html` | done |
 | Public config | `GET /api/config` | done |
 | Promo validation | `POST /api/promo/validate` | done |
-| Checkout | `POST /api/checkout` | done, **untested against Square** |
-| Recurring billing | `GET /api/billing/charge-cycle` (daily cron) | done, **untested against Square** |
-| Plan changes | `POST /api/plan-change` | done |
-| ClickUp provisioning | `POST /api/clickup/provision` | done, **untested against ClickUp** |
+| Checkout | `POST /api/checkout` | **verified against Square sandbox** |
+| Recurring billing | `GET /api/billing/charge-cycle` (daily cron) | **verified against Square sandbox** |
+| Plan changes | `POST /api/plan-change` | **verified** |
+| ClickUp provisioning | `POST /api/clickup/provision` | written, **untested — needs an API token** |
 
-The three "untested" rows are written and reviewed but have never run against a
-live API, because no Square credentials or ClickUp API token exist yet. Treat
-them as unverified until they have.
+Everything except ClickUp has been run end to end against Square sandbox and the
+live Supabase project: 42/42 checks, plus 18/18 unit tests. ClickUp provisioning
+is written but has never called the API — it needs a token.
+
+**Node 22 is required.** `@supabase/supabase-js` uses native WebSocket, which
+Node 20 does not have; `createClient` throws on construction there.
 
 ## Setup
 
@@ -178,3 +181,29 @@ subscription with a signed agreement became undeletable with no usable error.
 0002 replaces the rules with triggers that raise a real message, and moves the
 `subscription_id` foreign key to `ON DELETE RESTRICT` so the constraint is
 enforced honestly. Immutability is unchanged — it just fails legibly now.
+
+## Two bugs the end-to-end run caught
+
+Both were invisible to unit tests and would have reached production.
+
+**Every recurring charge would have failed.** The cycle idempotency key was
+`cycle-{uuid}-{iso date}` — 53 characters against Square's 45-character limit.
+Square rejects it with `VALUE_TOO_LONG`, so the initial checkout would have
+worked fine and then no client would ever have been billed again. Nothing short
+of calling the real API surfaces this.
+
+**The key was also keyed on the wrong things.** `(subscription, cycle date)`
+alone breaks in two ways:
+
+- If a plan change becomes effective while a cycle is being retried, the amount
+  differs from the first attempt and Square rejects the charge with
+  `IDEMPOTENCY_KEY_REUSED`. The subscription sticks at `past_due` and can never
+  be billed for that cycle.
+- An idempotency key is consumed by the *attempt*, not by its success. Reusing
+  it the next day to retry a declined card returns the original failed payment
+  rather than making a fresh attempt, so a recoverable decline never recovers.
+
+The key now includes the attempt date and the amount, which fixes both while
+preserving the guarantee it exists for: two runs on the same day, same cycle,
+same price collapse to one charge. That is asserted explicitly in the harness —
+both runs return the same Square payment id.
