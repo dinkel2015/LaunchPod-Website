@@ -1,0 +1,16 @@
+{
+  "name": "launchpod-portal-api",
+  "private": true,
+  "type": "module",
+  "description": "Serverless functions for the LaunchPod Media client portal. The site itself is static HTML; this package exists only for /api.",
+  "scripts": {
+    "test": "node --test api/_lib/"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "square": "^45.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

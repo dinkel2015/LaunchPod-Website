@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LaunchPod Media | Client Portal</title>
+<link rel="canonical" href="https://launchpodmedia.com/portal">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  html{scroll-behavior:smooth}
+  body{margin:0;background:#08060f;font-family:"Instrument Sans",system-ui,sans-serif;color:#fff}
+  a{color:#12C8D8;text-decoration:none}
+  a:hover{opacity:.8}
+  input,select{outline:none;font-family:inherit}
+  input::placeholder{color:rgba(255,255,255,.32)}
+  ::selection{background:#6E2BF2;color:#fff}
+  button{font-family:inherit}
+  @keyframes lpmRise{0%{opacity:0;transform:translateY(14px)}100%{opacity:1;transform:translateY(0)}}
+  #lpm-root{max-width:1320px;margin:0 auto;min-height:100vh;position:relative}
+  @media (max-width:980px){
+    .lpm-wiz-grid{grid-template-columns:1fr !important}
+    .lpm-summary-col{position:static !important;order:-1 !important}
+    .lpm-opt-grid{grid-template-columns:repeat(2,1fr) !important}
+    .lpm-dash-grid{grid-template-columns:1fr !important}
+    .lpm-pad-h{padding-left:20px !important;padding-right:20px !important}
+  }
+</style>
+</head>
+<body>
+<div id="lpm-root"></div>
+
+<script>
+/* =====================================================================
+   LAUNCHPOD MEDIA — CLIENT PORTAL
+   Vanilla HTML/CSS/JS rebuild of the prototype (no external runtime).
+   Pricing constants ported verbatim from propdoc/config/pricing.ts —
+   the same numbers PropDoc uses to generate sales proposals — so the
+   portal and the sales tool never drift apart. If pricing changes,
+   change it in BOTH places (or better: factor this block out into a
+   shared package both apps import).
+
+   INTEGRATION TODOs are marked explicitly throughout. Nothing in this
+   file talks to a real backend yet — see the TODO blocks for:
+     - Auth            (Supabase Auth — propdoc already has a Supabase project)
+     - Payment          (Square Web Payments SDK — needs Application ID + Location ID,
+                          which are public/non-secret and safe to hardcode here;
+                          actual charges must go through a server-side /api route
+                          using the SECRET key, never in this file)
+     - ClickUp handoff  (serverless function that duplicates the client template
+                          folder and returns a Dashboard URL to show here)
+   ===================================================================== */
+
+// ---------------------------------------------------------------------
+// PRICING — ported from propdoc/config/pricing.ts (2026-08-20 snapshot)
+// ---------------------------------------------------------------------
+const PRICING = {
+  ORBIT_TIERS: {
+    basic:    { label: "Basic",    monthly: 3000 },
+    standard: { label: "Standard", monthly: 4500 },
+    pro:      { label: "Pro",      monthly: 6000 },
+  },
+  HOST_ADDERS: { ai: 100, "1": 0, "2": 250, "3": 500, "4": 750 },
+  HOST_OPTIONS: [
+    { value: "ai", label: "AI Voiced" },
+    { value: "1", label: "1 Host" },
+    { value: "2", label: "2 Hosts" },
+    { value: "3", label: "3 Hosts" },
+    { value: "4", label: "4 Hosts" },
+  ],
+  EPISODE_LENGTHS: [15, 30, 45, 60, 75, 90, 105, 120],
+  RECORDING_LOCATIONS: [
+    { value: "lpm", label: "LPM Studio", note: "Included" },
+    { value: "client", label: "Client Setup", note: "Included" },
+    { value: "third_party", label: "3rd-Party Studio", note: "Booking fee TBD" },
+  ],
+  LAUNCH_BASE_PRICES: { 8: 10000, 10: 12500, 12: 15000 },
+  LAUNCH_LENGTH_MULTIPLIERS: { 15: .75, 30: .85, 45: 1.00, 60: 1.20, 75: 1.35, 90: 1.50, 105: 1.65, 120: 1.85 },
+  LAUNCH_EPISODE_OPTIONS: [8, 10, 12],
+  SCRIPT_RATES_PER_EPISODE: { 15: 315, 30: 675, 45: 975, 60: 1350, 75: 1575, 90: 1800, 105: 2200, 120: 2700 },
+  WEB_BASE_RATES: {
+    "30": { "15": 4000, "30": 5500, "45": 7000, "60": 9000, "75": 11000, "90plus": 13000 },
+    "8":  { "15": 1500, "30": 2000, "45": 2800, "60": 3500, "75": 4500, "90plus": 5500 },
+    "4":  { "15": 1500, "30": 1500, "45": 1500, "60": 1800, "75": 2200, "90plus": 2800 },
+    "3":  { "15": 1500, "30": 1500, "45": 1500, "60": 1500, "75": 2000, "90plus": 2500 },
+    "2":  { "15": 1500, "30": 1500, "45": 1500, "60": 1500, "75": 1500, "90plus": 2000 },
+    "1":  { "15": 1500, "30": 1500, "45": 1500, "60": 1500, "75": 1500, "90plus": 1500 },
+  },
+  WEB_FREQ_OPTIONS: [
+    { value: "1", label: "Monthly" }, { value: "2", label: "Biweekly" }, { value: "3", label: "3/mo" },
+    { value: "4", label: "Weekly" }, { value: "8", label: "2x/wk" }, { value: "30", label: "Daily" },
+  ],
+  WEB_ADDON_RATES: { transcript: 150, embeddedPlayer: 50, embeddedVideo: 100 },
+  BLOG_LENGTH_OPTIONS: [
+    { value: "none", label: "No Blog", adder: 0 },
+    { value: "500", label: "500–800 words", adder: 0 },
+    { value: "801", label: "801–1,200 words", adder: 100 },
+    { value: "1201", label: "1,201–1,700 words", adder: 250 },
+    { value: "1701", label: "1,701–2,500 words", adder: 400 },
+    { value: "2501", label: "2,501+ words", adder: 600 },
+  ],
+  SOCIAL_CLIP_RATES: { 1: 400, 2: 375, 4: 350, 6: 325, 8: 300 },
+  SOCIAL_CLIP_OPTIONS: [1, 2, 4, 6, 8],
+  PRODUCTION_RATES: { 15: 375, 30: 625, 45: 875, 60: 1250, 75: 1500, 90: 1750, 105: 1875, 120: 2000 },
+  BOOST_AD_RATES: { 1: 750, 2: 1000, 4: 1500, 8: 2000 },
+  BOOST_AD_OPTIONS: [1, 2, 4, 8],
+  DISCOUNTS: [
+    { key: "full_year", label: "Full Year Upfront", rate: 0.10 },
+    { key: "six_months", label: "6 Months Upfront", rate: 0.05 },
+    { key: "partner_referral", label: "Partner Referral", rate: 0.10 },
+    { key: "employee", label: "Employee", rate: 0.05 },
+  ],
+  // NOT in PropDoc yet — these three are carried over from the original
+  // prototype's hardcoded values. Flag with sales/John before launch:
+  // PropDoc (the proposal tool SDRs use) has no concept of Postcast,
+  // Webicast, or Audit at all, so there's no canonical source for these.
+  POSTCAST_MONTHLY: 1200,
+  WEBICAST_MONTHLY: 1200,
+  AUDIT_PRICE_DEFAULT: 1000,
+};
+
+function fmt(n) {
+  n = Math.round(n || 0);
+  return "$" + n.toLocaleString("en-US");
+}
+function lengthBucket(len) { return len >= 90 ? "90plus" : String(len); }
+
+// ---------------------------------------------------------------------
+// STATE
+// ---------------------------------------------------------------------
+const state = {
+  screen: "login", // login | signup | wizard | dashboard
+  loginEmail: "", loginPassword: "", loginError: "",
+  auth: { name: "", company: "", email: "", password: "", confirm: "", error: "" },
+  hasPackage: false, editMode: false,
+  wizardStep: 0,
+  pkg: {
+    path: "launch",
+    launch: { episodes: 10, lengthMin: 45, scripting: false, location: "lpm" },
+    orbit: { tier: "standard", voice: "1" },
+    pods: {
+      web: { enabled: false, freq: "4", transcripts: false, embeddedPlayers: false, embeddedVideo: false, blogLength: "none" },
+      social: { enabled: false, clips: 4 },
+      production: { enabled: false, freq: 4 },
+      boost: { enabled: false, adsPerMo: 1, adSpend: 500 },
+    },
+    paymentPlan: "monthly", promoCodeInput: "", promoApplied: null, promoError: false,
+  },
+  tosAccepted: false,
+  pay: { name: "", zip: "" }, // card fields intentionally NOT modeled here — see Payment step TODO
+  onboarding: { date: null, time: null, booked: false },
+  // TODO: once the ClickUp handoff exists, this gets populated from the
+  // server response after checkout (see "ClickUp handoff" TODO below).
+  clickupDashboardUrl: null,
+};
+
+const auditPrice = PRICING.AUDIT_PRICE_DEFAULT;
+
+// ---------------------------------------------------------------------
+// PRICING CALCULATIONS
+// ---------------------------------------------------------------------
+function computePricing() {
+  const pkg = state.pkg, path = pkg.path;
+
+  const launchBase = PRICING.LAUNCH_BASE_PRICES[pkg.launch.episodes] * PRICING.LAUNCH_LENGTH_MULTIPLIERS[pkg.launch.lengthMin];
+  const scriptingCost = pkg.launch.scripting ? PRICING.SCRIPT_RATES_PER_EPISODE[pkg.launch.lengthMin] * pkg.launch.episodes : 0;
+  const launchTotal = launchBase + scriptingCost;
+
+  const entryMonthly = path === "postcast" ? PRICING.POSTCAST_MONTHLY : path === "webicast" ? PRICING.WEBICAST_MONTHLY : 0;
+  const entryOneTime = path === "audit" ? auditPrice : 0;
+
+  const orbitMonthly = path === "launch" ? (PRICING.ORBIT_TIERS[pkg.orbit.tier].monthly + PRICING.HOST_ADDERS[pkg.orbit.voice]) : 0;
+
+  const web = pkg.pods.web;
+  const webBucket = lengthBucket(pkg.launch.lengthMin);
+  const webBase = web.enabled ? PRICING.WEB_BASE_RATES[web.freq][webBucket] : 0;
+  const freqPerMonth = Number(web.freq);
+  const webAddons = web.enabled ? (
+    (web.transcripts ? PRICING.WEB_ADDON_RATES.transcript * freqPerMonth : 0) +
+    (web.embeddedPlayers ? PRICING.WEB_ADDON_RATES.embeddedPlayer * freqPerMonth : 0) +
+    (web.embeddedVideo ? PRICING.WEB_ADDON_RATES.embeddedVideo * freqPerMonth : 0) +
+    ((PRICING.BLOG_LENGTH_OPTIONS.find(o => o.value === web.blogLength) || {}).adder || 0) * freqPerMonth
+  ) : 0;
+  const webMonthly = webBase + webAddons;
+
+  const social = pkg.pods.social;
+  const socialMonthly = social.enabled ? PRICING.SOCIAL_CLIP_RATES[social.clips] * social.clips : 0;
+
+  const production = pkg.pods.production;
+  const productionMonthly = production.enabled ? PRICING.PRODUCTION_RATES[pkg.launch.lengthMin] * production.freq : 0;
+
+  const boost = pkg.pods.boost;
+  const boostMgmt = boost.enabled ? PRICING.BOOST_AD_RATES[boost.adsPerMo] : 0;
+  const boostAdSpend = boost.enabled ? Number(boost.adSpend || 0) : 0;
+
+  const discountable = entryMonthly + webMonthly + socialMonthly + productionMonthly + boostMgmt;
+  const planDiscount = (PRICING.DISCOUNTS.find(d => d.key === pkg.paymentPlan) || {}).rate || 0;
+  const promoDiscount = pkg.promoApplied ? (PRICING.DISCOUNTS.find(d => d.key === pkg.promoApplied) || {}).rate || 0 : 0;
+  const discPct = planDiscount + promoDiscount;
+  const discAmount = discountable * discPct;
+
+  const recurringTotal = orbitMonthly + discountable - discAmount + boostAdSpend;
+  const chargedToday = path === "launch"
+    ? launchTotal
+    : (entryOneTime + entryMonthly + webMonthly + socialMonthly + productionMonthly + boostMgmt - discAmount + boostAdSpend);
+
+  const lineItems = [];
+  if (path === "launch") {
+    lineItems.push({ label: `Launch (one-time, ${pkg.launch.episodes} eps · ${pkg.launch.lengthMin}m)`, amount: fmt(launchBase) });
+    if (pkg.launch.scripting) lineItems.push({ label: "Scripting add-on", amount: fmt(scriptingCost) });
+    lineItems.push({ label: `Orbit (${PRICING.ORBIT_TIERS[pkg.orbit.tier].label})`, amount: fmt(orbitMonthly) + "/mo" });
+  }
+  if (path === "postcast") lineItems.push({ label: "Postcast", amount: fmt(entryMonthly) + "/mo" });
+  if (path === "webicast") lineItems.push({ label: "Webicast", amount: fmt(entryMonthly) + "/mo" });
+  if (path === "audit") lineItems.push({ label: "Podcast Audit (one-time)", amount: fmt(auditPrice) });
+  if (web.enabled) lineItems.push({ label: "Web Pod", amount: fmt(webMonthly) + "/mo" });
+  if (social.enabled) lineItems.push({ label: `Social Pod (${social.clips} clips)`, amount: fmt(socialMonthly) + "/mo" });
+  if (production.enabled) lineItems.push({ label: "Production Pod", amount: fmt(productionMonthly) + "/mo" });
+  if (boost.enabled) lineItems.push({ label: "Boost Pod mgmt", amount: fmt(boostMgmt) + "/mo" });
+  if (boost.enabled) lineItems.push({ label: "Boost ad spend (passthrough)", amount: fmt(boostAdSpend) + "/mo" });
+  if (discPct > 0) {
+    const labels = [];
+    if (planDiscount) labels.push(PRICING.DISCOUNTS.find(d => d.key === pkg.paymentPlan).label);
+    if (promoDiscount) labels.push(PRICING.DISCOUNTS.find(d => d.key === pkg.promoApplied).label);
+    lineItems.push({ label: `Discount (${labels.join(" + ")})`, amount: "−" + fmt(discAmount) });
+  }
+
+  return { launchTotal, entryMonthly, entryOneTime, orbitMonthly, webMonthly, socialMonthly, productionMonthly,
+    boostMgmt, boostAdSpend, recurringTotal, chargedToday, lineItems };
+}
+
+// ---------------------------------------------------------------------
+// RENDER HELPERS
+// ---------------------------------------------------------------------
+const root = document.getElementById("lpm-root");
+function render() { root.innerHTML = renderScreen(); bindEvents(); }
+
+function pill(active, extra) {
+  return `cursor:pointer;padding:14px 12px;border-radius:12px;text-align:center;transition:all .15s ease;border:1px solid ${active ? "rgba(110,43,242,.8)" : "rgba(255,255,255,.12)"};background:${active ? "linear-gradient(160deg,rgba(110,43,242,.32),rgba(18,200,216,.14))" : "rgba(255,255,255,.03)"};font:500 13px "Instrument Sans",sans-serif;color:#fff${extra || ""}`;
+}
+function cardSelect(active) {
+  return `cursor:pointer;padding:22px;border-radius:16px;transition:all .15s ease;border:1px solid ${active ? "rgba(110,43,242,.75)" : "rgba(255,255,255,.1)"};background:${active ? "linear-gradient(155deg,rgba(255,46,160,.12),rgba(110,43,242,.14))" : "rgba(255,255,255,.03)"}`;
+}
+function chip(active) {
+  return `cursor:pointer;padding:9px 14px;border-radius:100px;font:500 12px "Instrument Sans",sans-serif;border:1px solid ${active ? "rgba(18,200,216,.7)" : "rgba(255,255,255,.15)"};background:${active ? "rgba(18,200,216,.16)" : "transparent"};color:#fff`;
+}
+function toggleStyle(on) { return `width:42px;height:24px;border-radius:100px;position:relative;transition:background .15s ease;background:${on ? "#12C8D8" : "rgba(255,255,255,.18)"}`; }
+function knobStyle(on) { return `position:absolute;top:3px;left:${on ? "21px" : "3px"};width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s ease`; }
+const inputStyle = `width:100%;box-sizing:border-box;padding:13px 14px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.14);color:#fff;font:400 15px "Instrument Sans",sans-serif`;
+const labelStyle = `font:700 10px "Space Mono",monospace;letter-spacing:.12em;color:rgba(255,255,255,.5);display:block;margin-bottom:7px`;
+
+function stepsFor(path) {
+  return path === "launch"
+    ? ["path", "launch", "orbit", "pods", "discounts", "review", "tos", "payment", "success"]
+    : ["path", "entry", "pods", "discounts", "review", "tos", "payment", "success"];
+}
+const STEP_LABELS = { path: "Choose path", launch: "Configure Launch", entry: "Configure package", orbit: "Choose Orbit", pods: "Add Pods", discounts: "Discounts", review: "Review", tos: "Terms", payment: "Payment", success: "Done" };
+
+// ---------------------------------------------------------------------
+// SCREEN: AUTH
+// ---------------------------------------------------------------------
+function renderAuth() {
+  const isLogin = state.screen === "login";
+  return `
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">
+    <div style="width:100%;max-width:400px;animation:lpmRise .5s ease-out both">
+      <div style="text-align:center;margin-bottom:36px">
+        <div style="font:700 28px/1 'Space Grotesk',sans-serif;letter-spacing:-.02em;background:linear-gradient(95deg,#FF2EA0,#6E2BF2 55%,#12C8D8);-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:10px">LPM</div>
+        <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.2em;color:rgba(255,255,255,.5)">${isLogin ? "CLIENT PORTAL" : "CREATE ACCOUNT"}</div>
+      </div>
+      <div style="padding:32px;border-radius:20px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09)">
+        ${isLogin ? renderLoginForm() : renderSignupForm()}
+      </div>
+      <div style="text-align:center;font:400 11px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.3);margin-top:18px">
+        <!-- TODO(auth): wire to Supabase Auth (propdoc already has a Supabase
+             project — reuse it or spin up a "clients" table + auth there).
+             Until then this is UI only: no account is actually created or
+             verified, and nothing persists across a reload. -->
+        Backend not connected yet — sign in is a UI placeholder.
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderLoginForm() {
+  return `
+    <h1 style="font:600 24px 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 22px">Sign in</h1>
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div><label style="${labelStyle}">EMAIL</label>
+        <input type="email" id="loginEmail" placeholder="you@company.com" value="${state.loginEmail}" style="${inputStyle}"/></div>
+      <div><label style="${labelStyle}">PASSWORD</label>
+        <input type="password" id="loginPassword" placeholder="••••••••" value="${state.loginPassword}" style="${inputStyle}"/></div>
+      ${state.loginError ? `<div style="font:500 13px 'Instrument Sans',sans-serif;color:#FF2EA0">${state.loginError}</div>` : ""}
+      <button data-action="doLogin" style="margin-top:8px;border:none;cursor:pointer;font:600 15px 'Instrument Sans',sans-serif;color:#08060f;padding:14px;border-radius:100px;background:#fff">Sign in</button>
+      <div style="text-align:center;font:400 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:8px">New to LPM? <a href="#" data-action="goSignup" style="color:#12C8D8;font-weight:600">Create an account</a></div>
+    </div>`;
+}
+function renderSignupForm() {
+  const a = state.auth;
+  return `
+    <h1 style="font:600 24px 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 6px">Create your account</h1>
+    <p style="font:400 14px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin:0 0 22px">Set up access, then configure your package.</p>
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div><label style="${labelStyle}">FULL NAME</label><input type="text" id="authName" value="${a.name}" placeholder="Jordan Lee" style="${inputStyle}"/></div>
+      <div><label style="${labelStyle}">COMPANY</label><input type="text" id="authCompany" value="${a.company}" placeholder="Acme Inc." style="${inputStyle}"/></div>
+      <div><label style="${labelStyle}">EMAIL</label><input type="email" id="authEmail" value="${a.email}" placeholder="you@company.com" style="${inputStyle}"/></div>
+      <div><label style="${labelStyle}">PASSWORD</label><input type="password" id="authPassword" value="${a.password}" placeholder="At least 8 characters" style="${inputStyle}"/></div>
+      <div><label style="${labelStyle}">CONFIRM PASSWORD</label><input type="password" id="authConfirm" value="${a.confirm}" placeholder="••••••••" style="${inputStyle}"/></div>
+      ${a.error ? `<div style="font:500 13px 'Instrument Sans',sans-serif;color:#FF2EA0">${a.error}</div>` : ""}
+      <button data-action="doSignup" style="margin-top:8px;border:none;cursor:pointer;font:600 15px 'Instrument Sans',sans-serif;color:#08060f;padding:14px;border-radius:100px;background:#fff">Create account</button>
+      <div style="text-align:center;font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.45)">By continuing you agree to the LPM Terms of Service, reviewed at checkout.</div>
+      <div style="text-align:center;font:400 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:4px">Already have an account? <a href="#" data-action="goLogin" style="color:#12C8D8;font-weight:600">Sign in</a></div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------
+// SCREEN: WIZARD
+// ---------------------------------------------------------------------
+function renderTopBar() {
+  return `
+  <div class="lpm-pad-h" style="display:flex;align-items:center;justify-content:space-between;padding:22px 40px;border-bottom:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;align-items:center;gap:16px">
+      <span style="font:700 22px/1 'Space Grotesk',sans-serif;letter-spacing:-.02em;background:linear-gradient(95deg,#FF2EA0,#6E2BF2 55%,#12C8D8);-webkit-background-clip:text;background-clip:text;color:transparent">LPM</span>
+      <span style="width:1px;height:18px;background:rgba(255,255,255,.14)"></span>
+      <span style="font:500 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6)">Client Portal</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px">
+      <span style="font:500 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55)">${state.loginEmail || state.auth.email}</span>
+      <button data-action="doLogout" style="cursor:pointer;font:500 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.7);padding:9px 16px;border-radius:100px;border:1px solid rgba(255,255,255,.18);background:transparent">Log out</button>
+    </div>
+  </div>`;
+}
+
+function renderWizard() {
+  const pkg = state.pkg, path = pkg.path;
+  const steps = stepsFor(path);
+  const stepId = steps[Math.min(state.wizardStep, steps.length - 1)];
+  const p = computePricing();
+
+  const progressDots = steps.slice(0, 7).map((_, i) => `<div style="width:32px;height:4px;border-radius:2px;background:${i <= state.wizardStep ? "linear-gradient(95deg,#FF2EA0,#6E2BF2,#12C8D8)" : "rgba(255,255,255,.12)"}"></div>`).join("");
+
+  let stepHtml = "";
+  if (stepId === "path") stepHtml = renderStepPath();
+  else if (stepId === "launch") stepHtml = renderStepLaunch();
+  else if (stepId === "entry") stepHtml = renderStepEntry();
+  else if (stepId === "orbit") stepHtml = renderStepOrbit();
+  else if (stepId === "pods") stepHtml = renderStepPods(p);
+  else if (stepId === "discounts") stepHtml = renderStepDiscounts();
+  else if (stepId === "review") stepHtml = renderStepReview(p);
+  else if (stepId === "tos") stepHtml = renderStepTos();
+  else if (stepId === "payment") stepHtml = renderStepPayment();
+  else if (stepId === "success") stepHtml = renderStepSuccess(p);
+
+  const showSummary = stepId !== "success";
+  const showNav = stepId !== "success";
+  const nextDisabled = (stepId === "path" && !path) || (stepId === "tos" && !state.tosAccepted);
+  const nextLabel = stepId === "tos" ? "Continue to payment" : stepId === "payment" ? "Pay & confirm" : stepId === "review" ? "Accept & continue" : "Continue →";
+
+  return `
+  ${renderTopBar()}
+  <div class="lpm-pad-h" style="padding:34px 40px 100px">
+    ${state.editMode ? `
+    <div style="display:flex;gap:12px;align-items:flex-start;padding:16px 20px;border-radius:14px;background:rgba(255,46,160,.1);border:1px solid rgba(255,46,160,.35);margin-bottom:26px">
+      <span style="font-size:16px">⚠</span>
+      <div style="font:400 14px/1.55 'Instrument Sans',sans-serif;color:rgba(255,255,255,.82)">You're editing an active package. Changes to production, video, or content Pods take up to <strong>30 days</strong> to appear in delivered assets. Billing changes apply on your next cycle.</div>
+    </div>` : ""}
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${progressDots}</div>
+    <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.16em;color:rgba(255,255,255,.45);margin-bottom:30px">STEP ${state.wizardStep + 1} / ${steps.length} · ${STEP_LABELS[stepId]}</div>
+    <div class="lpm-wiz-grid" style="display:grid;grid-template-columns:1fr 360px;gap:40px;align-items:start">
+      <div>${stepHtml}</div>
+      ${showSummary ? renderSummaryCol(p) : ""}
+    </div>
+    ${showNav ? `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:40px;max-width:calc(100% - 400px)">
+      <button data-action="goBack" ${state.wizardStep === 0 ? "disabled" : ""} style="cursor:pointer;font:600 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.7);padding:13px 26px;border-radius:100px;border:1px solid rgba(255,255,255,.2);background:transparent${state.wizardStep === 0 ? ";opacity:.35;pointer-events:none" : ""}">← Back</button>
+      <button data-action="goNext" ${nextDisabled ? "disabled" : ""} style="cursor:pointer;font:600 14px 'Instrument Sans',sans-serif;color:#08060f;padding:13px 30px;border-radius:100px;border:none;background:#fff${nextDisabled ? ";opacity:.4;pointer-events:none" : ""}">${nextLabel}</button>
+    </div>` : ""}
+  </div>`;
+}
+
+function renderSummaryCol(p) {
+  return `
+  <div class="lpm-summary-col" style="position:sticky;top:20px;padding:24px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1)">
+    <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:14px">YOUR PACKAGE</div>
+    ${p.lineItems.map(l => `<div style="display:flex;align-items:baseline;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.07)"><span style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.7)">${l.label}</span><span style="font:600 14px 'Space Grotesk',sans-serif">${l.amount}</span></div>`).join("")}
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.14)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font:500 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6)">Due today</span><span style="font:700 20px 'Space Grotesk',sans-serif">${fmt(p.chargedToday)}</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px"><span style="font:500 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6)">Then monthly</span><span style="font:600 15px 'Space Grotesk',sans-serif;color:rgba(255,255,255,.8)">${fmt(p.recurringTotal)}/mo</span></div>
+    </div>
+  </div>`;
+}
+
+function renderStepPath() {
+  const paths = [
+    { key: "launch", label: "Full Launch System", tag: "FULL BUILD", desc: "Strategy, brand, recording, distribution — built from scratch over 6–8 weeks." },
+    { key: "postcast", label: "Postcast", tag: fmt(PRICING.POSTCAST_MONTHLY) + "/MO FLAT", desc: "Your best blog content, remixed into a real audio show — one flat monthly rate." },
+    { key: "webicast", label: "Webicast", tag: fmt(PRICING.WEBICAST_MONTHLY) + "/MO FLAT", desc: "Turn an existing webinar recording into a polished podcast — one flat monthly rate." },
+    { key: "audit", label: "Podcast Audit", tag: fmt(auditPrice) + " ONE-TIME", desc: "A flat-fee, standalone review of your existing show — no recurring commitment." },
+  ];
+  const selected = paths.find(o => o.key === state.pkg.path) || paths[0];
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">Choose how you start.</h2>
+    <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 24px;max-width:520px">The full Launch system builds your show from scratch. Postcast and Webicast turn content you already have into a podcast — lower lift, faster to live.</p>
+    <div style="display:flex;flex-direction:column;gap:14px;max-width:460px">
+      ${paths.map(o => `
+        <div data-action="setPath" data-value="${o.key}" style="${cardSelect(state.pkg.path === o.key)}">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="font:600 18px 'Space Grotesk',sans-serif">${o.label}</div>
+            <div style="font:600 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6)">${o.tag}</div>
+          </div>
+        </div>`).join("")}
+    </div>
+    <div style="margin-top:20px;padding:20px;border-radius:14px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);max-width:460px">
+      <div style="font:400 14px/1.55 'Instrument Sans',sans-serif;color:rgba(255,255,255,.65)">${selected.desc}</div>
+    </div>`;
+}
+
+function renderStepLaunch() {
+  const l = state.pkg.launch;
+  const scripting = l.scripting;
+  const scriptingCost = PRICING.SCRIPT_RATES_PER_EPISODE[l.lengthMin] * l.episodes;
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 26px">Configure your Launch.</h2>
+    <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:10px">EPISODE COUNT</div>
+    <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px">
+      ${PRICING.LAUNCH_EPISODE_OPTIONS.map(n => `
+        <div data-action="setLaunchEpisodes" data-value="${n}" style="${pill(l.episodes === n)}">
+          <div style="font:600 20px 'Space Grotesk',sans-serif">${n} eps</div>
+          <div style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:2px">${fmt(PRICING.LAUNCH_BASE_PRICES[n])}</div>
+        </div>`).join("")}
+    </div>
+    <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:10px">EPISODE LENGTH</div>
+    <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px">
+      ${PRICING.EPISODE_LENGTHS.map(m => `<div data-action="setLaunchLength" data-value="${m}" style="${pill(l.lengthMin === m)}">${m}m</div>`).join("")}
+    </div>
+    <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:10px">RECORDING LOCATION</div>
+    <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px">
+      ${PRICING.RECORDING_LOCATIONS.map(o => `
+        <div data-action="setLaunchLocation" data-value="${o.value}" style="${pill(l.location === o.value)}">
+          <div style="font:600 15px 'Space Grotesk',sans-serif">${o.label}</div>
+          <div style="font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5);margin-top:3px">${o.note}</div>
+        </div>`).join("")}
+    </div>
+    <div data-action="toggleScripting" style="cursor:pointer;padding:20px;border-radius:14px;border:1px solid ${scripting ? "rgba(18,200,216,.6)" : "rgba(255,255,255,.12)"};background:${scripting ? "rgba(18,200,216,.08)" : "rgba(255,255,255,.03)"}">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font:600 16px 'Space Grotesk',sans-serif">Add professional scripting</div>
+          <div style="font:400 13px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:4px;max-width:400px">For teams with the ideas but not the time to write. Billed per episode at your selected length.</div>
+        </div>
+        <div style="${toggleStyle(scripting)}"><div style="${knobStyle(scripting)}"></div></div>
+      </div>
+      ${scripting ? `<div style="font:600 14px 'Instrument Sans',sans-serif;color:#12C8D8;margin-top:10px">+${fmt(scriptingCost)} total (${fmt(PRICING.SCRIPT_RATES_PER_EPISODE[l.lengthMin])}/ep × ${l.episodes} eps)</div>` : ""}
+    </div>`;
+}
+
+function renderStepEntry() {
+  const path = state.pkg.path;
+  const title = path === "postcast" ? "Configure Postcast." : path === "webicast" ? "Configure Webicast." : "Podcast Audit.";
+  const desc = path === "postcast" || path === "webicast" ? "One flat monthly rate." : "A one-time flat fee — no recurring commitment.";
+  let card = "";
+  if (path === "postcast") card = `<div style="padding:24px;border-radius:16px;background:rgba(18,200,216,.1);border:1px solid rgba(18,200,216,.4)"><div style="display:flex;align-items:baseline;gap:10px"><div style="font:600 18px 'Space Grotesk',sans-serif">Postcast</div><div style="font:600 24px 'Space Grotesk',sans-serif">${fmt(PRICING.POSTCAST_MONTHLY)}<span style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo flat</span></div></div><div style="font:400 14px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin-top:8px">Your best blog and written content, remixed into a real audio show.</div></div>`;
+  if (path === "webicast") card = `<div style="padding:24px;border-radius:16px;background:rgba(110,43,242,.1);border:1px solid rgba(110,43,242,.4)"><div style="display:flex;align-items:baseline;gap:10px"><div style="font:600 18px 'Space Grotesk',sans-serif">Webicast</div><div style="font:600 24px 'Space Grotesk',sans-serif">${fmt(PRICING.WEBICAST_MONTHLY)}<span style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo flat</span></div></div><div style="font:400 14px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin-top:8px">Turn your existing webinar recordings into a polished podcast.</div></div>`;
+  if (path === "audit") card = `<div style="padding:24px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.14)"><div style="display:flex;align-items:baseline;gap:10px"><div style="font:600 18px 'Space Grotesk',sans-serif">Podcast Audit</div><div style="font:600 24px 'Space Grotesk',sans-serif">${fmt(auditPrice)}<span style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)"> one-time</span></div></div><div style="font:400 14px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin-top:8px">A one-time, flat-fee review of your existing show.</div></div>`;
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">${title}</h2>
+    <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 28px;max-width:520px">${desc}</p>
+    ${card}`;
+}
+
+function renderStepOrbit() {
+  const o = state.pkg.orbit;
+  const descs = { basic: "Straightforward shows — one or two voices, fixed cadence, simple approvals.", standard: "Most common tier. Multiple stakeholders, longer episodes, more coordination.", pro: "Enterprise shows — compliance review, multiple departments, high-volume schedules." };
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">Choose your Orbit tier.</h2>
+    <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 26px;max-width:520px">Orbit is required once Launch goes live — ongoing production, distribution and monthly reporting.</p>
+    <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px">
+      ${Object.keys(PRICING.ORBIT_TIERS).map(k => `
+        <div data-action="setOrbitTier" data-value="${k}" style="${cardSelect(o.tier === k)}">
+          <div style="font:600 22px 'Space Grotesk',sans-serif">${PRICING.ORBIT_TIERS[k].label}</div>
+          <div style="font:600 26px 'Space Grotesk',sans-serif;margin-top:8px">${fmt(PRICING.ORBIT_TIERS[k].monthly)}<span style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo</span></div>
+          <div style="font:400 13px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:10px">${descs[k]}</div>
+        </div>`).join("")}
+    </div>
+    <div style="font:400 13px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.45);margin-bottom:26px">Orbit doesn't start billing until your Launch is complete and the show goes live.</div>
+    <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:10px">HOST / VOICE SETUP</div>
+    <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">
+      ${PRICING.HOST_OPTIONS.map(opt => `
+        <div data-action="setOrbitVoice" data-value="${opt.value}" style="${pill(o.voice === opt.value)}">
+          <div style="font:600 13px 'Space Grotesk',sans-serif">${opt.label}</div>
+          <div style="font:400 11px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5);margin-top:3px">${PRICING.HOST_ADDERS[opt.value] ? "+$" + PRICING.HOST_ADDERS[opt.value] : "included"}</div>
+        </div>`).join("")}
+    </div>`;
+}
+
+function renderStepPods(p) {
+  const pods = state.pkg.pods;
+  const bucket = lengthBucket(state.pkg.launch.lengthMin);
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">Add the Pods you need.</h2>
+    <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 28px;max-width:560px">Optional — all monthly, cancel or adjust any time.</p>
+
+    <div style="padding:24px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);margin-bottom:16px">
+      <div data-action="toggleWeb" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+        <div><div style="font:600 19px 'Space Grotesk',sans-serif">Web Pod</div><div style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:3px">SEO content, transcripts, embeds</div></div>
+        <div style="display:flex;align-items:center;gap:14px"><span style="font:600 18px 'Space Grotesk',sans-serif">${fmt(p.webMonthly)}<span style="font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo</span></span><div style="${toggleStyle(pods.web.enabled)}"><div style="${knobStyle(pods.web.enabled)}"></div></div></div>
+      </div>
+      ${pods.web.enabled ? `
+        <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,.08)">
+          <div style="font:700 10px 'Space Mono',monospace;letter-spacing:.12em;color:rgba(255,255,255,.45);margin-bottom:8px">FREQUENCY (rate shown for your ${state.pkg.launch.lengthMin}m episodes)</div>
+          <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:16px">
+            ${PRICING.WEB_FREQ_OPTIONS.map(o => `<div data-action="setWebFreq" data-value="${o.value}" style="${pill(pods.web.freq === o.value)}">${o.label}</div>`).join("")}
+          </div>
+          <div style="font:700 10px 'Space Mono',monospace;letter-spacing:.12em;color:rgba(255,255,255,.45);margin-bottom:8px">ADD-ONS (per episode)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+            <div data-action="toggleTranscripts" style="${chip(pods.web.transcripts)}">Transcripts +$${PRICING.WEB_ADDON_RATES.transcript}/ep</div>
+            <div data-action="toggleEmbeddedPlayers" style="${chip(pods.web.embeddedPlayers)}">Embedded players +$${PRICING.WEB_ADDON_RATES.embeddedPlayer}/ep</div>
+            <div data-action="toggleEmbeddedVideo" style="${chip(pods.web.embeddedVideo)}">Embedded video +$${PRICING.WEB_ADDON_RATES.embeddedVideo}/ep</div>
+          </div>
+          <div style="font:700 10px 'Space Mono',monospace;letter-spacing:.12em;color:rgba(255,255,255,.45);margin-bottom:8px">BLOG LENGTH</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            ${PRICING.BLOG_LENGTH_OPTIONS.map(o => `<div data-action="setBlogLength" data-value="${o.value}" style="${chip(pods.web.blogLength === o.value)}">${o.label}${o.adder ? " (+$" + o.adder + "/ep)" : ""}</div>`).join("")}
+          </div>
+        </div>` : ""}
+    </div>
+
+    <div style="padding:24px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);margin-bottom:16px">
+      <div data-action="toggleSocial" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+        <div><div style="font:600 19px 'Space Grotesk',sans-serif">Social Pod</div><div style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:3px">Short-form clips for every platform</div></div>
+        <div style="display:flex;align-items:center;gap:14px"><span style="font:600 18px 'Space Grotesk',sans-serif">${fmt(p.socialMonthly)}<span style="font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo</span></span><div style="${toggleStyle(pods.social.enabled)}"><div style="${knobStyle(pods.social.enabled)}"></div></div></div>
+      </div>
+      ${pods.social.enabled ? `
+        <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,.08)">
+          <div style="font:700 10px 'Space Mono',monospace;letter-spacing:.12em;color:rgba(255,255,255,.45);margin-bottom:8px">CLIPS PER MONTH</div>
+          <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">
+            ${PRICING.SOCIAL_CLIP_OPTIONS.map(n => `<div data-action="setSocialClips" data-value="${n}" style="${pill(pods.social.clips === n)}"><div style="font:600 16px 'Space Grotesk',sans-serif">${n}</div><div style="font:400 11px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5);margin-top:2px">$${PRICING.SOCIAL_CLIP_RATES[n]}/clip</div></div>`).join("")}
+          </div>
+        </div>` : ""}
+    </div>
+
+    <div style="padding:24px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);margin-bottom:16px">
+      <div data-action="toggleProduction" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+        <div><div style="font:600 19px 'Space Grotesk',sans-serif">Production Pod</div><div style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:3px">Full video — color grading, animation, multi-angle</div></div>
+        <div style="display:flex;align-items:center;gap:14px"><span style="font:600 18px 'Space Grotesk',sans-serif">${fmt(p.productionMonthly)}<span style="font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo</span></span><div style="${toggleStyle(pods.production.enabled)}"><div style="${knobStyle(pods.production.enabled)}"></div></div></div>
+      </div>
+      ${pods.production.enabled ? `
+        <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,.08)">
+          <div style="font:700 10px 'Space Mono',monospace;letter-spacing:.12em;color:rgba(255,255,255,.45);margin-bottom:8px">VIDEO EPISODES / MONTH (at your ${state.pkg.launch.lengthMin}m length, $${PRICING.PRODUCTION_RATES[state.pkg.launch.lengthMin]}/ep)</div>
+          <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px">
+            ${PRICING.WEB_FREQ_OPTIONS.map(o => `<div data-action="setProductionFreq" data-value="${o.value}" style="${pill(String(pods.production.freq) === o.value)}">${o.label}</div>`).join("")}
+          </div>
+        </div>` : ""}
+    </div>
+
+    <div style="padding:24px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);margin-bottom:16px">
+      <div data-action="toggleBoost" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+        <div><div style="font:600 19px 'Space Grotesk',sans-serif">Boost Pod</div><div style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:3px">Paid promotion across Meta, TikTok, Instagram</div></div>
+        <div style="display:flex;align-items:center;gap:14px"><span style="font:600 18px 'Space Grotesk',sans-serif">${fmt(p.boostMgmt)}<span style="font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo mgmt</span></span><div style="${toggleStyle(pods.boost.enabled)}"><div style="${knobStyle(pods.boost.enabled)}"></div></div></div>
+      </div>
+      ${pods.boost.enabled ? `
+        <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,.08)">
+          <div style="font:700 10px 'Space Mono',monospace;letter-spacing:.12em;color:rgba(255,255,255,.45);margin-bottom:8px">ADS PER MONTH</div>
+          <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:18px">
+            ${PRICING.BOOST_AD_OPTIONS.map(n => `<div data-action="setBoostAds" data-value="${n}" style="${pill(pods.boost.adsPerMo === n)}"><div style="font:600 15px 'Space Grotesk',sans-serif">${n}</div><div style="font:400 11px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5);margin-top:2px">${fmt(PRICING.BOOST_AD_RATES[n])}/mo</div></div>`).join("")}
+          </div>
+          <label style="${labelStyle}">MONTHLY AD SPEND BUDGET (passed through to platforms)</label>
+          <div style="display:flex;align-items:center;gap:10px;max-width:220px">
+            <span style="font:600 18px 'Space Grotesk',sans-serif;color:rgba(255,255,255,.6)">$</span>
+            <input type="number" id="boostAdSpend" value="${pods.boost.adSpend}" style="width:100%;box-sizing:border-box;padding:11px 12px;border-radius:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.16);color:#fff;font:600 16px 'Instrument Sans',sans-serif"/>
+          </div>
+        </div>` : ""}
+    </div>`;
+}
+
+function renderStepDiscounts() {
+  const plans = [{ key: "monthly", label: "Monthly", desc: "No commitment, cancel any time.", rate: 0 },
+    ...PRICING.DISCOUNTS.filter(d => d.key === "full_year" || d.key === "six_months")];
+  const pkg = state.pkg;
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">How do you want to pay?</h2>
+    <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 28px;max-width:520px">Applies to your recurring Pod total — paying upfront saves you money.</p>
+    <div style="display:flex;flex-direction:column;gap:12px;max-width:460px;margin-bottom:32px">
+      ${plans.map(o => { const on = pkg.paymentPlan === o.key; return `
+        <div data-action="setPaymentPlan" data-value="${o.key}" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;border-radius:12px;border:1px solid ${on ? "rgba(18,200,216,.6)" : "rgba(255,255,255,.12)"};background:${on ? "rgba(18,200,216,.1)" : "rgba(255,255,255,.03)"}">
+          <div><div style="font:600 15px 'Instrument Sans',sans-serif">${o.desc ? o.label : o.label}</div><div style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:3px">${o.desc || "Pay for the term upfront."}</div></div>
+          ${o.rate ? `<div style="font:600 15px 'Space Grotesk',sans-serif;color:#12C8D8;white-space:nowrap">−${Math.round(o.rate * 100)}%</div>` : ""}
+        </div>`; }).join("")}
+    </div>
+    <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:10px">HAVE A PROMO CODE?</div>
+    <div style="display:flex;gap:10px;max-width:400px">
+      <input type="text" id="promoCodeInput" placeholder="Enter code" value="${pkg.promoCodeInput}" style="flex:1;box-sizing:border-box;padding:13px 14px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.16);color:#fff;font:400 14px 'Instrument Sans',sans-serif"/>
+      <button data-action="applyPromoCode" style="cursor:pointer;font:600 13px 'Instrument Sans',sans-serif;color:#fff;padding:0 20px;border-radius:10px;border:1px solid rgba(255,255,255,.2);background:transparent">Apply</button>
+    </div>
+    ${pkg.promoApplied ? `<div style="font:500 13px 'Instrument Sans',sans-serif;margin-top:10px;color:#12C8D8">✓ "${pkg.promoApplied}" applied</div>` : pkg.promoError ? `<div style="font:500 13px 'Instrument Sans',sans-serif;margin-top:10px;color:#FF2EA0">Code not recognized.</div>` : ""}`;
+}
+
+function renderStepReview(p) {
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">Review your package.</h2>
+    <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 26px;max-width:560px">Here's the split between what's charged today and what starts recurring.</p>
+    <div style="padding:26px;border-radius:18px;background:linear-gradient(155deg,rgba(255,46,160,.1),rgba(110,43,242,.08));border:1px solid rgba(110,43,242,.4);margin-bottom:18px">
+      <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.55);margin-bottom:10px">CHARGED TODAY</div>
+      <div style="font:600 40px 'Space Grotesk',sans-serif;letter-spacing:-.02em">${fmt(p.chargedToday)}</div>
+    </div>
+    <div style="padding:26px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);margin-bottom:18px">
+      <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:10px">RECURRING MONTHLY (STARTS LATER)</div>
+      <div style="font:600 34px 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin-bottom:16px">${fmt(p.recurringTotal)}<span style="font:400 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo</span></div>
+      ${p.lineItems.map(l => `<div style="display:flex;align-items:baseline;justify-content:space-between;padding:10px 0;border-top:1px solid rgba(255,255,255,.08)"><span style="font:400 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.75)">${l.label}</span><span style="font:600 15px 'Space Grotesk',sans-serif">${l.amount}</span></div>`).join("")}
+    </div>
+    <div style="font:400 13px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.45)">Production changes made after this point take up to 30 days to appear in delivered assets.</div>`;
+}
+
+const TOS_CLAUSES = [
+  { text: `LAUNCHPOD MEDIA STANDARD SERVICE AGREEMENT`, bold: false, applies: "all" },
+  { text: `These Terms of Service (this “Agreement”) govern CLIENT’s purchase and use of Services from LaunchPod Media, Inc, a Delaware corporation (“LAUNCHPOD”), located at 244 West 300 North Suite 100, Salt Lake City, Utah 84103, which is in the business of providing marketing and podcasting services. “CLIENT” means the individual or entity that creates an account, completes checkout, or otherwise purchases Services through LAUNCHPOD’s client portal, as identified by the account and billing information CLIENT provides at that time. This Agreement becomes effective as of the date CLIENT accepts it electronically in accordance with Section 12 (the “Effective Date”). CLIENT and LAUNCHPOD may sometimes be referred to herein individually as a “Party” and collectively as the “Parties.” In consideration of the mutual covenants contained herein, the Parties agree as follows:`, bold: false, applies: "all" },
+  { text: `Services.`, bold: false, applies: "all" },
+  { text: `Scope of Services and Statements of Work.  CLIENT hereby engages LAUNCHPOD to analyze the market, providing podcasting ideas and concepts, and implement a podcast plan for CLIENT; create, edit, and distribute a podcast on iTunes and Spotify, as well as other minor podcasting platforms as marketing needs require (“Content”); and write show note and/or blog posts, and social media posts for podcast launch (collectively, the “Services”), the scope of which is detailed in a Statement of Work (the “Statement of Work” or “SOW”) accompanying this Agreement. The Parties may agree to additional SOWs for additional Services from time-to-time, each of which will be subject to the terms and conditions of this Agreement and shall be incorporated herein. In the event of conflict between the terms of this Agreement and the terms of any SOW, the terms of this Agreement will prevail.`, bold: false, applies: "all" },
+  { text: `Changes.  If LAUNCHPOD reasonably believes that changes to the Services are necessary or if CLIENT requests a change to the Services in writing, then LAUNCHPOD will prepare an amendment to this Agreement or the relevant SOW and such amendment will be effective when executed by the Parties. Notwithstanding the foregoing, LAUNCHPOD may at any time correct any typographical errors.`, bold: false, applies: "all" },
+  { text: `Right to Refuse to Perform Certain Services.  LAUNCHPOD may upon prior written notice to Client refuse to perform all or any part of the Services if, in LAUNCHPOD’s sole opinion, LAUNCHPOD may be subject to a claim by a third party for slander, libel or any other legal claim.`, bold: false, applies: "all" },
+  { text: `Client Representative.  CLIENT agrees to designate and make available to LAUNCHPOD on a reasonably prompt basis at least one (1) employee or representative as a central point of contact who will represent CLIENT with respect to the Services (the “Client Representative”), as identified in CLIENT’s client portal account. CLIENT may change its Client Representative at any time by updating its client portal account or by written notice to LAUNCHPOD. The Client Representative will have the power and authority to authorize any changes to the Services and otherwise manage and coordinate the receipt of the Services, and CLIENT agrees that LAUNCHPOD may rely on any written decision of the Client Representative with respect to the Services as a decision of CLIENT.`, bold: false, applies: "all" },
+  { text: `LAUNCHPOD Representative.  LAUNCHPOD agrees to designate and make available to CLIENT on a reasonably prompt basis at least one (1) employee or representative as a central point of contact who will represent LAUNCHPOD with respect to the Services (the “LAUNCHPOD Representative”). LAUNCHPOD initially designates John Dinkel, who can be contacted at the following: phone: 801-471-5759; email: dinkel@launchpod.media. LAUNCHPOD may change the LAUNCHPOD Representative upon written notice to CLIENT. The LAUNCHPOD Representative will have power and authority to authorize any changes to the services and otherwise manage and coordinate the provision of the Services, including all material deliverables and decisions and LAUNCHPOD agrees that CLIENT may rely on any written decision of LAUNCHPOD Representative with respect to the Services as a decision of LAUNCHPOD.`, bold: false, applies: "all" },
+  { text: `Services.  CLIENT understands and acknowledges that LAUNCHPOD’s performance is dependent on CLIENT’s timely and effective performance of any CLIENT responsibilities set forth in this Agreement and applicable SOW. LAUNCHPOD understands and acknowledges that CLIENT is expecting timely and effective performance of LAUNCHPOD’s responsibilities set forth in this Agreements and applicable SOW. In connection with LAUNCHPOD providing the Services, CLIENT shall provide the services, information, feedback and/or other required information, as set forth in or required by the applicable SOW including, but not limited to, the following: (i) answering questions in a timely manner that have been submitted by LAUNCHPOD to help facilitate provision of the Services; (ii) at its own expense, providing LAUNCHPOD with all documents and other materials and all data and other information relating to the Services that is owned by CLIENT or legally in CLIENT’s position, custody or control (collectively, the “Client Materials”). LAUNCHPOD acknowledges that CLIENT may not have access to some information or documents. LAUNCHPOD shall provide the Services in accordance with the terms of this Agreement and exercise reasonable efforts to confirm or ensure the accuracy of the Client Material, if applicable, CLIENT shall pay the license fees and other costs for third party vendors as mutually agreed upon in writing by CLIENT and LAUNCHPOD obtain the licenses and credentials needed to access such third party vendors in connection with incorporating technologies, intellectual property rights or functionalities into the Services. Each Party shall provide reasonably adequate resources and meeting delivery dates, as mutually agreed upon by the Parties in a mutually agreeable project plan.`, bold: false, applies: "all" },
+  { text: `Subcontractors.  With respect to the provision of any of the Services, LAUNCHPOD may, upon the prior written approval of CLIENT (which may be withheld in CLIENT’s sole discretion), outsource or subcontract all of any portion of the provision of such Service. If LAUNCHPOD outsources or subcontracts the provision of any of the Services, it shall ensure that the third party to which it outsources or subcontracts agrees to comply and abide by provisions substantially similar to the provisions of this Agreement. Notwithstanding the foregoing, LAUNCHPOD shall remain liable hereunder for the provision of the Services whether outsourced or subcontracted to third parties.`, bold: false, applies: "all" },
+  { text: `Launch to Orbit Transition.  CLIENT’s engagement with LAUNCHPOD begins with the Launch package described in the applicable SOW (the “Launch Package”). Upon completion of the Launch Package, CLIENT will automatically transition to, and be enrolled in, LAUNCHPOD’s recurring Orbit subscription (the “Orbit Subscription”), and the Services will continue on a month-to-month basis under the Orbit Subscription, unless CLIENT requests a change to or cancellation of the Orbit Subscription in writing through the client portal before the transition date. LAUNCHPOD will notify CLIENT of the anticipated transition date at least seven (7) days in advance.`, bold: true, applies: "launch" },
+  { text: `Client-Managed Upgrades and Downgrades.  CLIENT may request to upgrade or downgrade its Orbit Subscription package at any time through the client portal. Any such upgrade or downgrade will take effect as of the start of the next production cycle following CLIENT’s request, and CLIENT will be billed at the rate applicable to the new package beginning with that production cycle.`, bold: true, applies: "launch", flag: "upgrades-slot" },
+  { text: `Term.  The initial term of this Agreement shall commence on the Effective Date and shall continue until completion of the Services or for six (6) months, whichever occurs later (the “Initial Term”) and will thereafter continue month-to-month until terminated by either Party consistent with the termination provision set forth in Section 9 (the Initial Term together with any subsequent renewal term as described above, the “Term”).`, bold: false, applies: "all" },
+  { text: `Compensation.`, bold: false, applies: "all" },
+  { text: `Fees.  As further set forth in the applicable SOW, in consideration of the Services, CLIENT agrees to pay the fees selected by CLIENT during checkout in the LaunchPod client portal or otherwise set forth in the applicable SOW (the “Fee”), due within five (5) business days of the beginning of each calendar month during the Term (or, for the Launch Package, as set forth in the applicable SOW). Notwithstanding anything to the contrary contained herein, CLIENT shall not be liable for any fees or other amounts (“Excess Fees”) in excess of the Fee unless such Excess Fees are selected by CLIENT in the client portal, set forth in the applicable SOW, or otherwise approved by CLIENT in writing.`, bold: false, applies: "all" },
+  { text: `Expenses.  In addition to the Fee, CLIENT will pay LAUNCHPOD’s reasonable, documented expenses (“Additional Expenses”) incurred in the performance of any and all of the Services so long as the Client Representative had provided prior written approval of such Additional Expenses. Such expenses may include, but not be limited to, design, print, production or distribution (e.g., via Business Wire) of materials for media relations, including online or print media kits, photography, videography, press tours, press dinners, travel expenses (including lodging and meals) or other activities as outlined in the applicable SOW. In the event there is an additional Content program included in the Services upon mutual agreement of the Parties, CLIENT will also be responsible for paying those reasonable and documented expenses, which could include graphic design, content creation, video production, market research or other activities as outlined in the applicable SOW. Upon request, LAUNCHPOD shall send CLIENT any and all expense detail for expenses incurred by LAUNCHPOD in the discharge of the Services.`, bold: false, applies: "all" },
+  { text: `Invoices.  Except as otherwise set forth in this Agreement, CLIENT shall pay all amounts on LAUNCHPOD invoices within five (5) days of the applicable invoice date.`, bold: false, applies: "all" },
+  { text: `Overdue Invoices.  LAUNCHPOD may charge a late fee on delinquent payments at the lesser of (i) the maximum amount chargeable by law or (ii) ten percent (10%) per month on the amount still owing. LAUNCHPOD late fees will apply to late payments resulting from lost, forgotten or misplaced invoices so long as any such invoice was properly delivered by LAUNCHPOD to CLIENT pursuant to Section 3.1. Failure to timely pay undisputed invoices may cause an interruption of the Services.`, bold: false, applies: "all" },
+  { text: `Taxes.  The Fee as stated in this Agreement does not include sales tax, or any other applicable duties as may be required by law. Any sales tax and duties required by law will be charged to CLIENT in addition to the Fee.`, bold: false, applies: "all" },
+  { text: `Automatic Billing.  CLIENT authorizes LAUNCHPOD to securely store CLIENT’s payment method in the client portal and to automatically charge such payment method for the Fee and any other amounts due under this Agreement on each applicable billing date, without further authorization from CLIENT for each recurring charge. LAUNCHPOD will send CLIENT a reminder email at least three (3) days before each scheduled charge. CLIENT is responsible for maintaining current, valid payment information in the client portal at all times. If a scheduled charge fails and is not cured within five (5) days after notice from LAUNCHPOD, LAUNCHPOD may suspend the Services until payment is received. LAUNCHPOD may also charge CLIENT a reasonable fee, not to exceed $25, for any payment that fails, is returned, or is reversed.`, bold: true, applies: "all" },
+  { text: `Ownership.`, bold: false, applies: "all" },
+  { text: `Work Made for Hire.  All information, material and Content that are made or otherwise compiled by LAUNCHPOD (solely or jointly with others) for CLIENT in connection with the Services during the Term and that are specifically prepared for CLIENT as part of the Services, shall be considered works made for hire and shall become the exclusive property of CLIENT upon payment in full to LAUNCHPOD of amounts owed by CLIENT under this Agreement (provided that LAUNCHPOD may retain archival copies of any material created by LAUNCHPOD specifically as part of the Services).`, bold: false, applies: "all" },
+  { text: `Client Ownership.  As between the Parties, CLIENT will at all times retain ownership of all trademarks, logos, photos, trademarked goods and services, know-how, and trade secrets that CLIENT may give, disclose, or provide access to LAUNCHPOD for purposes of providing the Services. So long as LAUNCHPOD adheres in all material respects to CLIENT’s written brand guidelines and written requests, CLIENT grants LAUNCHPOD a non-exclusive, fully-paid, non-transferrable limited trademark license during the Initial Term and subsequent renewal terms with respect to (i) and (ii) below to use and display CLIENT’s trademarks, logos, photos and trademarked materials (“Copyrighted Material”) solely (i) to provide the Services, and (ii) to disclose the relationship between CLIENT and LAUNCHPOD. CLIENT also licenses LAUNCHPOD to use and display CLIENT’s Copyrighted Material for communications with third parties or the general public regarding the Services provided by LAUNCHPOD to CLIENT (including, but not limited to, the publication of a “case study” generally describing the Services or for tenders, bids, proposals, testimonials, websites, marketing materials, other), which license shall survive expiration or termination of this Agreement; provided that CLIENT may request, no more than once per calendar year and upon thirty (30) days’ written notice, that LAUNCHPOD remove CLIENT’s Copyrighted Material from LAUNCHPOD’s then-current public-facing marketing materials on a going-forward basis, which request LAUNCHPOD will accommodate within a commercially reasonable time.`, bold: false, applies: "all" },
+  { text: `LAUNCHPOD Ownership.  LAUNCHPOD will retain exclusive ownership of all intellectual property rights in all of its know-how, concepts, techniques, methodologies, processes, service marks, copyrights and copyrightable works, trade secrets, data and formulas, and all updates, modifications, improvements, enhancements and derivative works of the same created or developed (i) prior to or apart from this Agreement or (ii) during the Term and that were not developed or conceived specifically for CLIENT or under this Agreement or any applicable SOW as part of the Services as set forth in Section 4.2 above.`, bold: false, applies: "all" },
+  { text: `Confidentiality.`, bold: false, applies: "all" },
+  { text: `Confidential Treatment.  Each Party acknowledges that “Confidential Information” (as defined below) may be disclosed to the other Party during the Term. Each Party agrees to: (i) not disclose or reveal the Confidential Information of the other Party to any third party and not reproduce or distribute such Confidential Information in any form, tangible or otherwise, except as allowed by the terms of this Agreement; and (ii) restrict access to all such Confidential Information to its employees and contractors who have a need to know in order to perform the obligations of the relevant Party under this Agreement, and each Party shall inform any such employees or contractors of the existence, importance and terms of this Agreement relating to such Confidential Information and require them to maintain such Confidential Information in accordance with the terms of this Agreement. For purposes of this Agreement, “Confidential Information” shall mean all confidential and proprietary information of a Party disclosed to or made available to the other Party that (x) if disclosed orally is designated as confidential at the time of disclosure or reasonably thereafter, (y) if disclosed in writing is marked as “Confidential” and/or “Proprietary” or with similar markings, or (z) even if not identified as Confidential, reasonably should be understood to be confidential given the nature of the information and the circumstances of disclosure including, but not limited to, the terms and conditions of this Agreement and/or of provision of the Services.`, bold: false, applies: "all" },
+  { text: `Treatment of Non-Confidential Client Material.  CLIENT recognizes that it is fundamental to the performance of the Services for LAUNCHPOD to disseminate information about CLIENT’s business, services and products to the media and other third parties. Any Client Material that is not Confidential Information will be treated by LAUNCHPOD as non-confidential and may be disseminated by LAUNCHPOD pursuant to the terms of this Agreement.`, bold: false, applies: "all" },
+  { text: `Exceptions.  Nothing in this Agreement will impose a confidentiality obligation on either Party with respect to information or material that the receiving Party can show: (i) is rightfully in the public domain without any breach by the receiving Party, but only from the date that it entered the public domain other than by or through the other Party; (ii) is rightfully received from a third party without any obligation of confidentiality; (iii) is rightfully known to the receiving Party without any obligation of confidentiality prior to its receipt from the disclosing Party; (iv) is independently developed by employees of the receiving Party without use of the disclosing Party’s Confidential Information; (v) is made generally available to third parties by the disclosing Party without restrictions on disclosure; or (vi) is required to be disclosed under applicable law or governmental rules or regulations (including, without limitation, federal or state securities laws, rules and regulations), provided that the receiving Party gives to the disclosing Party reasonable advance notice in writing of the need for disclosure.`, bold: false, applies: "all" },
+  { text: `Specific Performance.  If either Party breaches any covenant set forth in this Section 5, such breach may cause irreparable harm to the other Party and, in the event of such breach, such Party shall be entitled, in addition to seeking monetary damages and to any other remedies available to such Party under this Agreement and at law, to seek equitable relief, including injunctive relief.`, bold: false, applies: "all" },
+  { text: `Warranties.`, bold: false, applies: "all" },
+  { text: `Warranties of CLIENT.`, bold: false, applies: "all" },
+  { text: `Content Responsibility.  CLIENT represents and warrants that it either owns or has obtained all rights to use and commercially publish or distribute the Client Materials and that to CLIENT’s knowledge, all the Client Materials are accurate and do not infringe on any other person’s intellectual property. CLIENT acknowledges and agrees that LAUNCHPOD has no responsibility to validate the accuracy or correctness of any claims made in any Client Materials, and that CLIENT shall indemnify LAUNCHPOD in accordance with Section 7.1 for any Loss (as defined in Section 7.1) LAUNCHPOD incurs based on a breach of this warranty in this Section 6.1(a).`, bold: false, applies: "all" },
+  { text: `Publicity.  LAUNCHPOD may, in its discretion, issue a press release after the Effective Date, announcing that CLIENT is using LAUNCHPOD’s Services, and containing a quote that is complimentary of LAUNCHPOD and/or the Services from a senior executive of CLIENT. LAUNCHPOD will provide a draft of, and obtain CLIENT’s prior written approval of, such quote before its release. As set forth in Section 4.2 above, LAUNCHPOD may also include CLIENT’s name and trademark(s) in communications with third parties and the general public regarding the Services provided by LAUNCHPOD to CLIENT.`, bold: false, applies: "all" },
+  { text: `Warranties of LAUNCHPOD.`, bold: false, applies: "all" },
+  { text: `Limited Warranty.  LAUNCHPOD represents and warrants that: (A) LAUNCHPOD will provide the Services with skill and care in accordance with a standard to be expected from a competent and professional provider of public relations services; (B) the Services will be provided in accordance with the specifications set forth in this Agreement and applicable SOW; and (C) the Services will substantially comply with all laws and regulations and will not knowingly infringe on the proprietary rights of any third party. LAUNCHPOD will not publish any materials that it knows or has reason to believe has errors or is misleading, offensive or infringes on third-party intellectual property; provided, however, LAUNCHPOD shall not have a duty to investigate the foregoing.`, bold: false, applies: "all" },
+  { text: `Disclaimer of Warranties.  Except for the limited warranties set forth in this Agreement, THE SERVICES ARE PROVIDED ‘AS-IS’ WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, WARRANTIES OF PERFORMANCE, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.`, bold: false, applies: "all" },
+  { text: `Indemnity.`, bold: false, applies: "all" },
+  { text: `Mutual Indemnification.  Each Party (the “Indemnifying Party”) hereby agrees to indemnify and hold harmless the other Party (the “Indemnified Party”) and its subsidiaries and affiliates, and their respective directors, officers, employees, agents, shareholders, partners, members and other owners, against any and all claims, actions, demands, liabilities, losses, damages, judgments, settlements, costs and expenses, including reasonable attorneys’ fees (any or all of the foregoing hereinafter referred to as “Losses”), to the extent such Losses (or actions in respect thereof) result from (i) a breach of warranties, representations or covenants set forth in this Agreement, (ii) negligent or willful acts and/or omissions caused by the Indemnifying Party’s employees, agents or permitted subcontractors under this Agreement, and (iii) infringement of any third-party intellectual property right, including, but not limited to, patents, trademarks, copyrights or trade secrets; provided that, with respect to LAUNCHPOD as the Indemnifying Party, clause (ii) above shall apply only to the extent such acts or omissions constitute gross negligence or willful misconduct.`, bold: false, applies: "all" },
+  { text: `Indemnification by CLIENT.  CLIENT agrees to indemnify and hold LAUNCHPOD and its directors, officers, employees, agents and shareholders harmless from any claims by third parties brought against CLIENT or LAUNCHPOD that are based upon information or materials supplied by CLIENT.`, bold: false, applies: "all" },
+  { text: `Indemnification by LAUNCHPOD.  LAUNCHPOD agrees to indemnify and hold CLIENT and its directors, officers, employees, agents and shareholders harmless from any claims by third parties brought against CLIENT that are based upon information or materials supplied by LAUNCHPOD.`, bold: false, applies: "all" },
+  { text: `Indemnification Procedure.  The indemnification obligations set forth in Sections 7.1 through 7.3 above are contingent upon the following conditions: (i) the Indemnified Party must promptly notify the Indemnifying Party in writing of the claim; however, failure of the Indemnified Party to so promptly notify the Indemnifying Party will not relieve the Indemnifying Party of its indemnification obligations hereunder, except to the extent it has been damaged thereby; (ii) the Indemnified Party must reasonably cooperate with the Indemnifying Party in the defense of the matter; and (iii) the Indemnifying Party will have primary control of the defense of the action and negotiations for its settlement and compromise; provided, however, that: (A) the Indemnified Party will have the right to approve any settlement or compromise that will impose any obligation upon it or that may adversely affect its rights under this Agreement or its rights to any of the Indemnified Party’s materials subject to copyright, patent, trade secret or trademark protection; and (B) the Indemnified Party may, at its own cost, obtain separate counsel to represent its interests.`, bold: false, applies: "all" },
+  { text: `Limitation of Liabilities.`, bold: false, applies: "all" },
+  { text: `Liability for Events Outside of Control.  LAUNCHPOD will not be held liable for any failure or delay in performing the Services or any Losses to CLIENT if such failure, delay or Losses could not have reasonably been anticipated and is caused by events outside of LAUNCHPOD’s reasonable control.`, bold: false, applies: "all" },
+  { text: `Damages.  IN NO EVENT SHALL EITHER PARTY BE LIABLE FOR ANY SPECIAL, INDIRECT INCIDENTAL, CONSEQUENTIAL OR PUNITIVE DAMAGES ARISING OUT OF THIS AGREEMENT, HOWEVER CAUSED AND UNDER ANY THEORY OF LIABILITY, INCLUDING DAMAGES RELATING TO LOSS OF PROFITS, INCOME OR BUSINESS, EVEN IF EITHER PARTY HAS BEEN ADVISED, KNEW OR SHOULD HAVE KNOWN OF THE POSSIBILITY OF SUCH DAMAGES.`, bold: false, applies: "all" },
+  { text: `Limitations on Liability.  EXCLUDING LAUNCHPOD’S INDEMNIFICATION OBLIGATIONS HEREUNDER, LAUNCHPOD SHALL NOT BE LIABLE FOR ANY DAMAGES TO CLIENT, OR TO ANY AFFILIATED PARTY OF CLIENT FOR BREACH OF THIS AGREEMENT, OR TO ANY AFFILIATED PARTY OF CLIENT, IN EXCESS OF THE AMOUNT ACTUALLY PAID BY CLIENT TO LAUNCHPOD UNDER THIS AGREEMENT DURING THE THREE (3) MONTHS IMMEDIATELY PRECEDING THE EVENT GIVING RISE TO THE CLAIM.`, bold: false, applies: "all" },
+  { text: `Termination.`, bold: false, applies: "all" },
+  { text: `Termination for Convenience. `, bold: true, applies: "all", flag: "convenience-header" },
+  { text: `Launch Package.  CLIENT may not terminate this Agreement for convenience during the Launch Package. If CLIENT terminates this Agreement for convenience before completion of the Launch Package, CLIENT shall pay LAUNCHPOD one hundred percent (100%) of the sum total of the Launch Package fees remaining unpaid as of the date of CLIENT’s notice of termination, which shall be paid no later than thirty (30) calendar days after CLIENT provides LAUNCHPOD written notice of its desire to terminate this Agreement.`, bold: false, applies: "launch" },
+  { text: `Orbit Subscription.  Once CLIENT’s Orbit Subscription has commenced, CLIENT may cancel the Orbit Subscription at any time by providing LAUNCHPOD at least thirty (30) calendar days’ prior written notice through the client portal or otherwise. This notice period reflects LAUNCHPOD’s advance production scheduling for CLIENT’s Services and is not a cancellation fee or penalty. Cancellation will be effective at the end of the notice period, and CLIENT will remain responsible for the Fee for each production cycle that begins before the effective date of cancellation.`, bold: false, applies: "launch" },
+  { text: `Termination Upon Breach.  At any time, either Party (the “Non-breaching Party”) may terminate this Agreement upon written notice to the other Party in the event the other Party (the “Breaching Party”) breaches a material term or condition of this Agreement and fails to cure such breach within thirty (30) calendar days after receipt of written notice from the Non-breaching Party of the nature of the breach. Notwithstanding the foregoing, where LAUNCHPOD is the Non-breaching Party, the cure period afforded to CLIENT as Breaching Party shall be fifteen (15) calendar days rather than thirty (30) calendar days. However, such cure period shall automatically be extended if the cure for the existing default will take more than thirty (30) calendar days to complete so long as the Breaching Party has initiated action to accomplish such cure, and provided that such cure period shall not extend for a period longer than the commercially reasonable time necessary to accomplish such cure. If LAUNCHPOD is the Breaching Party and CLIENT terminates this Agreement pursuant to this Section 9.2, then any and all fees owed by CLIENT to LAUNCHPOD shall cease to accrue on and after the date of the breach of a material term giving rise to termination so long as CLIENT, upon discovery of such breach, immediately notifies LAUNCHPOD of such breach. CLIENT shall not be entitled to any deliverables and/or services provided by LAUNCHPOD after the date of such breach when fees owed by CLIENT to LAUNCHPOD stop accruing. If CLIENT is the Breaching Party and fails to cure such breach, CLIENT shall pay LAUNCHPOD: (x) if such breach occurs during the Launch Package, one hundred percent (100%) of the sum total of the Launch Package fees remaining unpaid; or (y) if such breach occurs during the Orbit Subscription, an amount equal to the Fee for the production cycle in which the breach occurred plus the Fee for the following production cycle, in either case paid no later than thirty (30) calendar days after the end of the thirty (30) calendar day cure period. LAUNCHPOD may also suspend the Services immediately upon notice of breach and pending cure.`, bold: false, applies: "all", flag: "breach-note" },
+  { text: `Procedure upon Termination.  Upon termination of the Agreement for whatever reason: (i) LAUNCHPOD will cease providing the Services and any other deliverables agreed as part of the Services; (ii) LAUNCHPOD will return to CLIENT, at CLIENT’s expense, all Client Material and any Confidential Information of CLIENT; and (iii) except as provided in the last sentence of Section 9.2, CLIENT will be liable to pay all undisputed (so long such dispute is made in good faith) fees for Services rendered and expenses incurred under the Agreement or any SOW; and (iv) LAUNCHPOD will deliver to CLIENT all Content and other deliverables contracted for under the applicable SOW within thirty (30) days after the effective date of termination or expiration (the “Delivery Period”). CLIENT is solely responsible for downloading and independently storing all assets delivered under this Section 9.3(iv). LAUNCHPOD may retain copies of such assets for up to thirty (30) days following the end of the Delivery Period (the “Retention Period”), after which LAUNCHPOD may delete its copies of such assets without further notice to CLIENT.`, bold: false, applies: "all" },
+  { text: `Non-Solicitation Agreement.  CLIENT understands and acknowledges that LAUNCHPOD will assign an account team who will be responsible for CLIENT’s account. Such dedication requires LAUNCHPOD to incur certain training, education and other unrecoverable costs. In consideration for such training, education and other cost, CLIENT agrees not to solicit any member of such account team for employment or consulting purposes during the Term and for one (1) year thereafter without LAUNCHPOD’s written consent. CLIENT further agrees to pay liquidated damages of $10,000 per employee hired by CLIENT in the event of a breach of this Section 10.`, bold: false, applies: "all" },
+  { text: `Miscellaneous.`, bold: false, applies: "all" },
+  { text: `Independent Contractors.  The Parties shall at all times while this Agreement is in effect be independent contractors, and nothing contained in this Agreement shall create or be construed as creating a partnership, joint venture, agency or employment relationship between the Parties. Except as expressly allowed by the terms of the Agreement, neither Party will have the authority to create any contract or obligation binding on the other Party, and neither Party shall be liable, except as expressly provided in this Agreement, for any expenses, liabilities, or other obligations incurred by the other Party.`, bold: false, applies: "all" },
+  { text: `Legal Fees.  If any legal action, arbitration or other proceeding is brought for the enforcement of this Agreement, or because of any alleged dispute, breach, default or misrepresentation in connection with this Agreement, the successful or prevailing Party shall be entitled to recover reasonable attorneys’ fees and other costs it incurred in that action or proceeding, in addition to any other relief to which it may be entitled.`, bold: false, applies: "all" },
+  { text: `Further Assurances.  Each of the Parties will execute and deliver such additional documents, instruments, conveyances and assurances and take such further actions as may be required to carry out the provisions of this Agreement and give effect to the transactions contemplated hereby.`, bold: false, applies: "all" },
+  { text: `Amendments and Waivers. LAUNCHPOD may amend or update this Agreement from time to time by posting the revised Agreement in the client portal or by emailing notice to CLIENT’s Client Representative at least fifteen (15) days before the revised terms take effect. CLIENT’s continued use of the Services, or continuation of the Orbit Subscription, after the effective date of any such revision constitutes CLIENT’s acceptance of the revised Agreement. Any change to CLIENT’s then-current Fee will be made in accordance with, and subject to the notice requirements of, Section 1.9 and Section 3.6. Any other amendment or waiver of this Agreement, and any waiver of a provision of this Section 11.4, must be in a writing signed by both LAUNCHPOD and CLIENT.`, bold: false, applies: "all" },
+  { text: `Notices.  All notices, requests, consents, claims, demands, waivers and other communications hereunder shall be in writing and shall be deemed to have been given: (a) when delivered by hand; (b) when received by the addressee if sent by a nationally recognized overnight courier (receipt requested); (c) on the date sent by facsimile (with confirmation of transmission) or email; or (d) on the third day after the date mailed, by certified or registered mail, return receipt requested, postage prepaid. Such communications must be sent to the Party’s contact information set forth in this Agreement (or at such other address as shall be specified by such Party in a notice given in accordance with this Section 11.5).`, bold: false, applies: "all" },
+  { text: `Severability.  With respect to any part or provision of this Agreement that is deemed by a court to be unenforceable as written, but may be rendered enforceable by limitation thereof, the Parties agree that such part or provision shall be amended in such a manner as to render it enforceable to the fullest extent permitted under the applicable law. If any term or provision of this Agreement shall be found to be illegal or unenforceable and cannot be amended in such a manner as to render it enforceable, then, notwithstanding such illegality or non-enforceability, the Agreement shall remain in full force and effect and any illegal or unenforceable terms or provisions shall be deemed to be deleted.`, bold: false, applies: "all" },
+  { text: `Survival.  Any provisions regarding confidentiality, ownership, payment, indemnification, limitations of liability and any provisions that, by their sense and context are intended to survive performance by either Party or both Parties, shall survive termination of this Agreement.`, bold: false, applies: "all" },
+  { text: `Force Majeure.  Except for CLIENT’s payment obligations, if the performance of any part of this Agreement is prevented, hindered, delayed or otherwise made impracticable by reason of any cause or event not within the reasonable control of such Party and without its fault or negligence, that Party shall be excused from such performance to the extent that it is prevented, hindered or delayed by such causes; provided, however, that if such an event prevents LAUNCHPOD from fulfilling its obligations hereunder for thirty (30) days or more, CLIENT may upon written notice to LAUNCHPOD terminate this Agreement.`, bold: false, applies: "all" },
+  { text: `Assignment.  This Agreement will be binding upon and will inure to the benefit of the Parties and their respective permitted successors and permitted assigns. Neither Party may assign its rights or delegate its obligations hereunder without the prior written consent of the other Party, which consent may be withheld in the discretion of the other Party; provided that each Party may make such assignment or transfer without the other Party’s consent to such Party’s affiliate or to the successor of all or substantially all of the business of such Party to which this Agreement relates (whether by merger, change of control, acquisition or sale of assets). Any purported assignment or delegation in violation of this Section 11.9 shall be null and void. No assignment or delegation shall relieve the assigning or delegating Party of any of its obligations hereunder.`, bold: false, applies: "all" },
+  { text: `No Third-Party Beneficiaries.  This Agreement is for the sole benefit of the Parties and their respective permitted successors and permitted assigns and nothing herein, express or implied, is intended to or shall confer upon any other person or entity any legal or equitable right, benefit or remedy of any nature whatsoever under or by reason of this Agreement.`, bold: false, applies: "all" },
+  { text: `Governing Law, Jurisdiction/Venue and Waiver of Jury Trial.  All matters arising out of or related to this Agreement shall be governed by and construed in accordance with the internal laws of the State of Utah without giving effect to any choice or conflict of law provision or rule, whether of the State of Utah or any other jurisdiction. Any legal suit, action or proceeding arising out of or related to this Agreement or the transactions contemplated hereby or thereby, shall be instituted in the federal courts of the United States of America or the courts of the State of Utah, if the federal courts do not have jurisdiction, in each case located in the City of Salt Lake and County of Salt Lake, and each Party irrevocably submits to the exclusive jurisdiction of such courts in any such suit, action or proceeding. The Parties irrevocably and unconditionally waive any objection to personal jurisdiction, the laying of venue of any suit, action or proceeding in such courts, and irrevocably waive and agree not to plead or claim in any such court that any such suit, action or proceeding brought in any such court has been brought in an inconvenient forum. EACH PARTY ACKNOWLEDGES AND AGREES THAT ANY CONTROVERSY WHICH MAY ARISE UNDER THIS AGREEMENT IS LIKELY TO INVOLVE COMPLICATED AND DIFFICULT ISSUES AND, THEREFORE, EACH SUCH PARTY IRREVOCABLY AND UNCONDITIONALLY WAIVES ANY RIGHT IT MAY HAVE TO A TRIAL BY JURY IN RESPECT OF ANY LEGAL ACTION ARISING OUT OF OR RELATING TO THIS AGREEMENT OR THE TRANSACTIONS CONTEMPLATED HEREBY OR THEREBY.`, bold: false, applies: "all" },
+  { text: `Construction.  This Agreement shall be construed without regard to any presumption or rule requiring construction or interpretation against the Party drafting an instrument or causing any instrument to be drafted.`, bold: false, applies: "all" },
+  { text: `Counterparts.  This Agreement may be executed in any number of counterparts, each of which shall constitute an original.`, bold: false, applies: "all" },
+  { text: `Entire Agreement.  This Agreement together with any SOW and all related exhibits and schedules constitutes the entire agreement with respect to the subject matter herein and supersedes all prior or contemporaneous oral or written agreements concerning such subject matter.`, bold: false, applies: "all" },
+  { text: `Electronic Acceptance.  CLIENT may accept this Agreement electronically by checking the applicable acceptance box or clicking “I Agree” (or a similar affirmative action) during checkout in the LaunchPod client portal. Such electronic acceptance constitutes CLIENT’s valid execution of, and agreement to be bound by, this Agreement and the applicable SOW to the same extent as if CLIENT had signed this Agreement by hand, and no further signature shall be required unless the Parties otherwise agree in writing.`, bold: true, applies: "all" },
+  { text: `This Agreement is executed through CLIENT’s electronic acceptance under Section 12 (Electronic Acceptance). No additional signature page is required unless the Parties expressly agree otherwise in a separate signed writing.`, bold: false, applies: "all" },
+  { text: `EXHIBIT A`, bold: false, applies: "all" },
+  { text: `LaunchPod Media Statement of Work (SOW)`, bold: false, applies: "all" },
+  { text: `The Statement of Work applicable to CLIENT’s Services will be attached to this Agreement as Exhibit A and is incorporated herein by reference. In the event of any conflict between this Agreement and the applicable Statement of Work, this Agreement will control except to the extent the Statement of Work expressly states otherwise.`, bold: true, applies: "all" },
+];
+
+// Split a clause's leading "Heading.  " phrase (period + two spaces) out
+// and bold it, matching the source document's heading convention. Bare
+// section-title paragraphs (no body after the split) render as dividers.
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+const DIVIDER_STYLE = "margin:20px 0 8px;font:700 13px 'Space Mono',monospace;letter-spacing:.08em;color:rgba(255,255,255,.75)";
+function renderTosParagraph(text) {
+  const idx = text.indexOf(".  ");
+  if (idx === -1) {
+    // Bare section titles (e.g. "Services.", the document title, "EXHIBIT A")
+    // have no ".  " body split — treat short ones as dividers, not prose.
+    const style = text.length < 60 ? DIVIDER_STYLE : "margin:0 0 14px";
+    return `<p style="${style}">${escapeHtml(text)}</p>`;
+  }
+  const head = text.slice(0, idx + 1);
+  const rest = text.slice(idx + 2).replace(/^\s+/, "");
+  if (!rest.trim()) return `<p style="${DIVIDER_STYLE}">${escapeHtml(head)}</p>`;
+  return `<p style="margin:0 0 14px"><strong>${escapeHtml(head)}</strong>&nbsp; ${escapeHtml(rest)}</p>`;
+}
+
+// Compose the agreement from LPM's actual standard agreement (Michael
+// Blackham's 2026-07-28 redline, accepted) — sections tied to the
+// Launch → Orbit structure only render for the "launch" path. Postcast/
+// Webicast/Audit clients see the universal terms plus a transparent note
+// wherever Launch/Orbit-specific language would otherwise go, since
+// counsel hasn't drafted equivalent language for those paths yet.
+// TODO(legal): once Michael provides Postcast/Webicast cancellation +
+// breach-damages language, add it here with applies:"standalone" and
+// extend the isLaunch/isAudit branches below to use it instead of the
+// pending-note fallback.
+// Postcast/Webicast have no "Launch Package" — they bill from day one on
+// a flat monthly rate, structurally identical to what Orbit looks like
+// once it's running. So per John (2026-08-20): base their equivalent
+// clauses on Mike's Orbit Subscription language, swapping terminology,
+// rather than leaving those clients with no cancellation/upgrade terms
+// at all. These three are DRAFTED, not attorney-authored — flagged
+// inline and in the console so they get a quick confirm from Mike before
+// anyone treats this as final. They are not simply invented: every
+// sentence here is Mike's own Orbit Subscription / Upgrades-Downgrades /
+// Termination-Upon-Breach language with "Orbit Subscription" swapped for
+// "Postcast/Webicast subscription" and the Launch-Package branch removed
+// (since there is no Launch Package for these two products).
+const STANDALONE_UPGRADES_CLAUSE = `Client-Managed Upgrades and Downgrades.  CLIENT may request to upgrade, downgrade, or otherwise change its Postcast or Webicast subscription (including any Pods) at any time through the client portal. Any such change will take effect as of the start of the next production cycle following CLIENT’s request, and CLIENT will be billed at the rate applicable to the new package beginning with that production cycle.`;
+const STANDALONE_CANCELLATION_CLAUSE = `Postcast/Webicast Subscription.  CLIENT may cancel its Postcast or Webicast subscription at any time by providing LAUNCHPOD at least thirty (30) calendar days’ prior written notice through the client portal or otherwise. This notice period reflects LAUNCHPOD’s advance production scheduling for CLIENT’s Services and is not a cancellation fee or penalty. Cancellation will be effective at the end of the notice period, and CLIENT will remain responsible for the Fee for each production cycle that begins before the effective date of cancellation.`;
+const STANDALONE_BREACH_CLAUSE = `Termination Upon Breach.  At any time, either Party (the “Non-breaching Party”) may terminate this Agreement upon written notice to the other Party in the event the other Party (the “Breaching Party”) breaches a material term or condition of this Agreement and fails to cure such breach within thirty (30) calendar days after receipt of written notice from the Non-breaching Party of the nature of the breach. Notwithstanding the foregoing, where LAUNCHPOD is the Non-breaching Party, the cure period afforded to CLIENT as Breaching Party shall be fifteen (15) calendar days rather than thirty (30) calendar days. However, such cure period shall automatically be extended if the cure for the existing default will take more than thirty (30) calendar days to complete so long as the Breaching Party has initiated action to accomplish such cure, and provided that such cure period shall not extend for a period longer than the commercially reasonable time necessary to accomplish such cure. If LAUNCHPOD is the Breaching Party and CLIENT terminates this Agreement pursuant to this Section 9.2, then any and all fees owed by CLIENT to LAUNCHPOD shall cease to accrue on and after the date of the breach of a material term giving rise to termination so long as CLIENT, upon discovery of such breach, immediately notifies LAUNCHPOD of such breach. CLIENT shall not be entitled to any deliverables and/or services provided by LAUNCHPOD after the date of such breach when fees owed by CLIENT to LAUNCHPOD stop accruing. If CLIENT is the Breaching Party and fails to cure such breach, CLIENT shall pay LAUNCHPOD an amount equal to the Fee for the production cycle in which the breach occurred plus the Fee for the following production cycle, paid no later than thirty (30) calendar days after the end of the thirty (30) calendar day cure period. LAUNCHPOD may also suspend the Services immediately upon notice of breach and pending cure.`;
+
+function adaptedTag() {
+  return `<p style="margin:-6px 0 14px;font-style:italic;font-size:12px;color:rgba(255,255,255,.35)">Adapted from the Orbit Subscription language above — pending Michael's confirmation.</p>`;
+}
+
+function renderTosDocument(path) {
+  const isLaunch = path === "launch";
+  const isAudit = path === "audit";
+  const isStandalone = !isLaunch && !isAudit; // postcast / webicast
+  let html = "";
+  for (const c of TOS_CLAUSES) {
+    if (c.applies === "launch" && !isLaunch) {
+      if (c.flag === "upgrades-slot" && isStandalone) {
+        html += renderTosParagraph(STANDALONE_UPGRADES_CLAUSE) + adaptedTag();
+      }
+      continue;
+    }
+    if (c.flag === "breach-note" && isStandalone) {
+      html += renderTosParagraph(STANDALONE_BREACH_CLAUSE) + adaptedTag();
+      continue;
+    }
+    html += renderTosParagraph(c.text);
+    if (c.flag === "convenience-header") {
+      if (isAudit) {
+        html += `<p style="margin:0 0 14px;font-style:italic;color:rgba(255,255,255,.4)">Not applicable — the Podcast Audit is a one-time engagement with no recurring subscription to cancel.</p>`;
+      } else if (isStandalone) {
+        html += renderTosParagraph(STANDALONE_CANCELLATION_CLAUSE) + adaptedTag();
+      }
+    }
+  }
+  return html;
+}
+
+function renderStepTos() {
+  const path = state.pkg.path;
+  const pendingNote = path !== "launch"
+    ? `<div style="font:600 12px 'Instrument Sans',sans-serif;color:#FF2EA0;margin-bottom:14px">A few sections below are adapted for this package type and still need a quick confirm from counsel — flagged inline.</div>`
+    : "";
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">Terms of Service.</h2>
+    <div style="font:700 10px 'Space Mono',monospace;letter-spacing:.12em;color:rgba(255,255,255,.4);margin-bottom:20px">LPM STANDARD SERVICE AGREEMENT — REV. 2026-07-28 — PENDING FINAL SIGN-OFF FROM COUNSEL</div>
+    ${pendingNote}
+    <div style="height:280px;overflow-y:auto;padding:22px;border-radius:14px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);font:400 14px/1.7 'Instrument Sans',sans-serif;color:rgba(255,255,255,.62);margin-bottom:20px">${renderTosDocument(path)}</div>
+    <div data-action="toggleTosAccept" style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;padding:16px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1)">
+      <div style="flex:none;width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font:700 13px sans-serif;border:1px solid ${state.tosAccepted ? "#12C8D8" : "rgba(255,255,255,.3)"};background:${state.tosAccepted ? "#12C8D8" : "transparent"};color:#08060f">${state.tosAccepted ? "✓" : ""}</div>
+      <div style="font:400 14px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.78)">I have read and agree to the Terms of Service and authorize LPM to charge the payment method provided, including recurring monthly charges once services begin.</div>
+    </div>`;
+}
+
+function renderStepPayment() {
+  /* TODO(square): Mount Square Web Payments SDK's card element into
+     #square-card-container. This needs:
+       1. Add a Square Web Payments SDK script tag (web.squarecdn.com/v1/square.js) to <head>
+       2. Square Application ID + Location ID (public, safe to hardcode
+          client-side — NOT the secret key) once you provide them.
+       3. A server-side /api/checkout route that takes the resulting
+          nonce/token and calls Square's Payments API with the SECRET
+          key. That key must never appear in this file or any client JS.
+     Until that's wired, this step is deliberately non-functional —
+     it does not collect or transmit card data. */
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">Payment.</h2>
+    <p style="font:400 15px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 24px">Securely processed by Square. Your card is saved for recurring monthly billing.</p>
+    <div style="max-width:440px;padding:26px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <span style="font:700 12px 'Space Mono',monospace;letter-spacing:.1em;color:rgba(255,255,255,.55)">CARD DETAILS</span>
+        <span style="font:600 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.45)">Powered by Square</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <input type="text" id="payName" placeholder="Name on card" value="${state.pay.name}" style="${inputStyle}"/>
+        <div id="square-card-container" style="padding:14px;border-radius:10px;background:rgba(255,255,255,.04);border:1px dashed rgba(255,255,255,.25);color:rgba(255,255,255,.4);font:400 13px 'Instrument Sans',sans-serif">Square Web Payments SDK mounts here (not yet connected — see code comment).</div>
+        <input type="text" id="payZip" placeholder="Billing ZIP" value="${state.pay.zip}" style="${inputStyle}"/>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:16px;font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.4)"><span>🔒</span>Card data handled entirely by Square — never touches LPM servers.</div>
+    </div>`;
+}
+
+function renderStepSuccess(p) {
+  return `
+    <div style="text-align:center;padding:40px 0;max-width:480px;margin:0 auto">
+      <div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(140deg,#FF2EA0,#6E2BF2 55%,#12C8D8);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;font-size:28px">✓</div>
+      <h2 style="font:600 30px 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 12px">You're booked in.</h2>
+      <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.65);margin:0 0 30px">${fmt(p.chargedToday)} was processed today. Next, grab a time for your onboarding call so we can kick things off.</p>
+      <button data-action="goToDashboard" style="border:none;cursor:pointer;font:600 15px 'Instrument Sans',sans-serif;color:#08060f;padding:15px 30px;border-radius:100px;background:#fff">Go to my dashboard →</button>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------
+// SCREEN: DASHBOARD
+// ---------------------------------------------------------------------
+function renderDashboard() {
+  const p = computePricing();
+  const pathLabels = { launch: "Launch System", postcast: "Postcast", webicast: "Webicast", audit: "Podcast Audit" };
+  return `
+  ${renderTopBar()}
+  <div class="lpm-pad-h" style="padding:34px 40px 100px">
+    <h1 style="font:600 32px 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 6px">Welcome back.</h1>
+    <p style="font:400 15px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin:0 0 30px">Here's where your show stands.</p>
+    <div class="lpm-dash-grid" style="display:grid;grid-template-columns:1.4fr 1fr;gap:20px;align-items:start">
+      <div style="display:flex;flex-direction:column;gap:20px">
+        <div style="padding:28px;border-radius:20px;background:linear-gradient(155deg,rgba(255,46,160,.1),rgba(110,43,242,.08));border:1px solid rgba(110,43,242,.35)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+            <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.55)">YOUR PACKAGE</div>
+            <button data-action="startEdit" style="cursor:pointer;font:600 13px 'Instrument Sans',sans-serif;color:#fff;padding:9px 18px;border-radius:100px;border:1px solid rgba(255,255,255,.25);background:transparent">Edit package</button>
+          </div>
+          <div style="font:600 26px 'Space Grotesk',sans-serif;margin-bottom:14px">${pathLabels[state.pkg.path]}</div>
+          ${p.lineItems.map(l => `<div style="display:flex;align-items:baseline;justify-content:space-between;padding:9px 0;border-top:1px solid rgba(255,255,255,.1)"><span style="font:400 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.75)">${l.label}</span><span style="font:600 15px 'Space Grotesk',sans-serif">${l.amount}</span></div>`).join("")}
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.16)">
+            <span style="font:500 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.65)">Recurring monthly</span>
+            <span style="font:700 22px 'Space Grotesk',sans-serif">${fmt(p.recurringTotal)}/mo</span>
+          </div>
+        </div>
+
+        <div style="padding:28px;border-radius:20px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09)">
+          <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:14px">PRODUCTION STATUS</div>
+          ${state.clickupDashboardUrl ? `
+            <p style="font:400 14px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 16px">Live task status, files, and your account team's chat — same dashboard your account manager sees, just for you.</p>
+            <a href="${state.clickupDashboardUrl}" target="_blank" style="display:inline-block;font:600 14px 'Instrument Sans',sans-serif;color:#08060f;padding:12px 22px;border-radius:100px;background:#fff">Open your production dashboard →</a>
+          ` : `
+            <!-- TODO(clickup): once checkout succeeds, a serverless function
+                 should duplicate the "Client Template Folder" into the
+                 Delivery space in ClickUp (workspace 90132069393), seed it
+                 with the onboarding list(s) matching this client's path
+                 (New/Existing Podcast, WebiCast, or PostCast onboarding,
+                 per PRICING.LAUNCH_EPISODE_OPTIONS etc.), grant the client
+                 guest access to its Dashboard view, and store that
+                 Dashboard's URL — set it as state.clickupDashboardUrl. -->
+            <p style="font:400 14px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">Your production dashboard will appear here once your account is set up in ClickUp.</p>
+          `}
+        </div>
+
+        <div style="padding:28px;border-radius:20px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09)">
+          <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:14px">ONBOARDING CALL</div>
+          ${state.onboarding.booked ? `
+            <div style="display:flex;align-items:center;gap:12px;padding:16px;border-radius:12px;background:rgba(18,200,216,.1);border:1px solid rgba(18,200,216,.4)">
+              <span style="font-size:18px">✓</span>
+              <div><div style="font:600 15px 'Space Grotesk',sans-serif">Booked — ${state.onboarding.date} at ${state.onboarding.time}</div><div style="font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:2px">A calendar invite will follow by email</div></div>
+            </div>` : `
+            <!-- TODO(calendar): replace with a real Calendly/scheduling
+                 embed tied to the assigned account manager's availability
+                 (per the BlackHill dashboard, LPM already uses Calendly
+                 for this — reuse the same account-manager links). -->
+            <p style="font:400 14px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6)">Onboarding scheduling isn't connected yet — your account manager will follow up by email to book this.</p>`}
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:20px">
+        <div style="padding:28px;border-radius:20px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09)">
+          <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:16px">PAYMENT METHOD</div>
+          <p style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">Not connected yet — see Payment step TODO.</p>
+        </div>
+        <div style="padding:22px;border-radius:16px;background:rgba(18,200,216,.06);border:1px solid rgba(18,200,216,.3)">
+          <div style="font:600 14px 'Space Grotesk',sans-serif;margin-bottom:6px">Need help?</div>
+          <div style="font:400 13px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6)">Reach your account manager any time at <a href="mailto:management@launchpod.media">management@launchpod.media</a></div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---------------------------------------------------------------------
+// SCREEN ROUTER
+// ---------------------------------------------------------------------
+function renderScreen() {
+  if (state.screen === "login" || state.screen === "signup") return renderAuth();
+  if (state.screen === "wizard") return renderWizard();
+  if (state.screen === "dashboard") return renderDashboard();
+  return "";
+}
+
+// ---------------------------------------------------------------------
+// EVENTS
+// ---------------------------------------------------------------------
+function bindEvents() {
+  root.querySelectorAll("[data-action]").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      const action = el.getAttribute("data-action");
+      const value = el.getAttribute("data-value");
+      handleAction(action, value);
+    });
+  });
+  // Keep text inputs in sync without losing focus on every keystroke —
+  // read values back into state on blur/change rather than full re-render per keystroke.
+  const bindInput = (id, path) => {
+    const el = root.querySelector("#" + id);
+    if (!el) return;
+    el.addEventListener("change", () => setPath(path, el.value));
+  };
+  bindInput("loginEmail", "loginEmail");
+  bindInput("loginPassword", "loginPassword");
+  bindInput("authName", "auth.name");
+  bindInput("authCompany", "auth.company");
+  bindInput("authEmail", "auth.email");
+  bindInput("authPassword", "auth.password");
+  bindInput("authConfirm", "auth.confirm");
+  bindInput("boostAdSpend", "pkg.pods.boost.adSpend");
+  bindInput("promoCodeInput", "pkg.promoCodeInput");
+  bindInput("payName", "pay.name");
+  bindInput("payZip", "pay.zip");
+}
+
+function setPath(path, value) {
+  const parts = path.split(".");
+  let obj = state;
+  for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
+  obj[parts[parts.length - 1]] = value;
+}
+
+function handleAction(action, value) {
+  const pkg = state.pkg;
+  switch (action) {
+    case "goLogin": state.screen = "login"; state.loginError = ""; break;
+    case "goSignup": state.screen = "signup"; break;
+    case "doLogin":
+      // TODO(auth): replace with a real Supabase Auth sign-in call.
+      if (!state.loginEmail || !state.loginPassword) { state.loginError = "Enter your email and password."; break; }
+      state.loginError = "";
+      state.screen = state.hasPackage ? "dashboard" : "wizard";
+      break;
+    case "doSignup": {
+      // TODO(auth): replace with a real Supabase Auth sign-up call.
+      const a = state.auth;
+      if (!a.name || !a.company || !a.email || !a.password) { a.error = "Please fill in all fields."; break; }
+      if (a.password.length < 8) { a.error = "Password must be at least 8 characters."; break; }
+      if (a.password !== a.confirm) { a.error = "Passwords do not match."; break; }
+      a.error = "";
+      state.loginEmail = a.email;
+      state.screen = "wizard";
+      break;
+    }
+    case "doLogout": state.screen = "login"; break;
+    case "setPath": pkg.path = value; break;
+    case "setLaunchEpisodes": pkg.launch.episodes = Number(value); break;
+    case "setLaunchLength": pkg.launch.lengthMin = Number(value); break;
+    case "setLaunchLocation": pkg.launch.location = value; break;
+    case "toggleScripting": pkg.launch.scripting = !pkg.launch.scripting; break;
+    case "setOrbitTier": pkg.orbit.tier = value; break;
+    case "setOrbitVoice": pkg.orbit.voice = value; break;
+    case "toggleWeb": pkg.pods.web.enabled = !pkg.pods.web.enabled; break;
+    case "setWebFreq": pkg.pods.web.freq = value; break;
+    case "toggleTranscripts": pkg.pods.web.transcripts = !pkg.pods.web.transcripts; break;
+    case "toggleEmbeddedPlayers": pkg.pods.web.embeddedPlayers = !pkg.pods.web.embeddedPlayers; break;
+    case "toggleEmbeddedVideo": pkg.pods.web.embeddedVideo = !pkg.pods.web.embeddedVideo; break;
+    case "setBlogLength": pkg.pods.web.blogLength = value; break;
+    case "toggleSocial": pkg.pods.social.enabled = !pkg.pods.social.enabled; break;
+    case "setSocialClips": pkg.pods.social.clips = Number(value); break;
+    case "toggleProduction": pkg.pods.production.enabled = !pkg.pods.production.enabled; break;
+    case "setProductionFreq": pkg.pods.production.freq = Number(value); break;
+    case "toggleBoost": pkg.pods.boost.enabled = !pkg.pods.boost.enabled; break;
+    case "setBoostAds": pkg.pods.boost.adsPerMo = Number(value); break;
+    case "setPaymentPlan": pkg.paymentPlan = value; break;
+    case "applyPromoCode": {
+      const code = (pkg.promoCodeInput || "").trim().toLowerCase().replace(/\s+/g, "_");
+      const found = PRICING.DISCOUNTS.find(d => d.key === code && (code === "partner_referral" || code === "employee"));
+      if (found) { pkg.promoApplied = found.key; pkg.promoError = false; }
+      else { pkg.promoApplied = null; pkg.promoError = true; }
+      break;
+    }
+    case "toggleTosAccept": state.tosAccepted = !state.tosAccepted; break;
+    case "goBack": state.wizardStep = Math.max(0, state.wizardStep - 1); break;
+    case "goNext": {
+      const steps = stepsFor(pkg.path);
+      const stepId = steps[Math.min(state.wizardStep, steps.length - 1)];
+      if (stepId === "payment") {
+        // TODO(square): this is where the real charge happens — call
+        // /api/checkout with the Square nonce, wait for success, THEN
+        // advance. Right now it advances unconditionally with no charge.
+        state.hasPackage = true;
+      }
+      state.wizardStep += 1;
+      break;
+    }
+    case "goToDashboard": state.screen = "dashboard"; state.editMode = false; state.wizardStep = 0; break;
+    case "startEdit": state.screen = "wizard"; state.editMode = true; state.wizardStep = 0; break;
+  }
+  render();
+}
+
+render();
+</script>
+</body>
+</html>
