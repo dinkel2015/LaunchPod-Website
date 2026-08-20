@@ -67,6 +67,36 @@ Runs without any credentials. Covers:
   missing, the cron route refuses a wrong/absent secret, checkout refuses an
   unauthenticated caller before touching Square.
 
+## End-to-end check
+
+```bash
+node --env-file=.env scripts/e2e.mjs
+```
+
+Mounts the real `/api` handlers behind a Vercel-compatible req/res shim and
+drives a full signup-to-charge run against Square sandbox and the live Supabase
+project — so what it verifies is the shipping code path, not a re-implementation.
+It creates a throwaway client per run and cleans up after itself. Needs a local
+`.env` (gitignored) including `SUPABASE_SERVICE_ROLE_KEY`.
+
+## Blocking issue: email confirmation
+
+Signup is currently **impossible** on this project. Email confirmation is on, and
+Supabase's built-in SMTP is rate-limited to a handful of messages per hour — it
+is explicitly not for production use. Every signup attempt during testing failed
+with `over_email_send_rate_limit`, and `auth.users` stayed empty.
+
+Two ways forward, in Authentication → Providers → Email:
+
+1. **Turn off "Confirm email"** for v1. Signup returns a session immediately and
+   the client goes straight into the wizard. Fastest path to launch.
+2. **Configure custom SMTP** (Resend or Postmark). Needed anyway if checkout is
+   ever going to send a receipt — the handoff left that provider undecided.
+
+The portal already handles both cases: with confirmation on it tells the client
+to confirm and sign in rather than dropping them into a wizard they cannot check
+out from.
+
 ## Things worth knowing
 
 **Pricing lives in three places.** `propdoc/config/pricing.ts`, `portal.html`,
