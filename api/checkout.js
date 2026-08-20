@@ -196,7 +196,7 @@ export default async function handler(req, res) {
     return json(res, 200, {
       subscriptionId,
       clickupProvisioned: Boolean(clickup),
-      dashboardUrl: clickup?.folderUrl ?? null,
+      dashboardUrl: clickup?.dashboardUrl ?? null,
       chargedTodayCents: price.chargedTodayCents,
       recurringCents: price.recurringCents,
       billingAnchor: toDateString(anchor),

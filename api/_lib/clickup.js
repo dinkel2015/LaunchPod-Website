@@ -19,12 +19,23 @@
       lists a given package path actually needs — matching how the real
       client folders (Doba, SubBase, Crucial Learning) are laid out.
 
-   2. Dashboards are not exposed by the public API at all — they cannot
-      be created, duplicated, or queried. So `clickup_dashboard_url` is
-      populated with the client's FOLDER url, which is shareable with a
-      guest and is the closest equivalent available. A real Dashboard,
-      if one is wanted, has to be created once in the UI per client and
-      pasted in, or replaced by a shared Folder/List view.
+   2. Standalone Dashboards (the top-level Dashboards section) are not in
+      the public API. Folder-scoped dashboard VIEWS are: they can be
+      listed via GET /folder/{id}/view and created via POST to the same
+      path with type "dashboard" — verified against this workspace. Every
+      real client folder here (Doba, MWCN, SubBase, Crucial Learning,
+      BlackHill) has one named "<Client> Client Dashboard", so
+      provisioning reuses a template-supplied dashboard view if there is
+      one and otherwise creates it, matching that convention.
+
+      What the API will NOT do is populate the dashboard's widgets. A
+      created dashboard view arrives empty; the cards have to be added
+      once in the UI, or carried across by the folder template.
+
+   3. Neither the folder nor the view API returns a URL, so the
+      client-facing link is CONSTRUCTED here. The view id is stored
+      alongside it on the subscription, so if the URL shape is ever wrong
+      it is one UPDATE to fix rather than a re-provision of every client.
    ===================================================================== */
 
 import { requireEnv } from "./http.js";
@@ -139,14 +150,48 @@ export async function provisionClient(db, subscriptionId) {
     }
   }
 
-  // See note (2) above: this is a Folder url, not a Dashboard url.
-  const folderUrl = `https://app.clickup.com/${requireEnv("CLICKUP_TEAM_ID")}/v/f/${folder.id}`;
+  const team = requireEnv("CLICKUP_TEAM_ID");
+  const folderUrl = `https://app.clickup.com/${team}/v/f/${folder.id}`;
+
+  /* Reuse a dashboard view the template brought across; create one if
+     not. Named to match the existing client folders. */
+  let dashboardViewId = null;
+  try {
+    const views = await clickup(`/folder/${folder.id}/view`);
+    dashboardViewId = (views.views || []).find((v) => v.type === "dashboard")?.id ?? null;
+
+    if (!dashboardViewId) {
+      const created = await clickup(`/folder/${folder.id}/view`, {
+        method: "POST",
+        body: JSON.stringify({ name: `${clientName} Client Dashboard`, type: "dashboard" }),
+      });
+      dashboardViewId = created.view?.id ?? null;
+    }
+  } catch (e) {
+    // The folder and its lists already exist and are the thing that
+    // matters; a missing dashboard view must not fail provisioning.
+    console.error("could not attach a dashboard view", e.body ?? e.message);
+  }
+
+  const dashboardUrl = dashboardViewId
+    ? `https://app.clickup.com/${team}/v/dsh/${dashboardViewId}`
+    : folderUrl;
 
   const { error: updateErr } = await db
     .from("subscriptions")
-    .update({ clickup_folder_id: String(folder.id), clickup_dashboard_url: folderUrl })
+    .update({
+      clickup_folder_id: String(folder.id),
+      clickup_dashboard_view_id: dashboardViewId,
+      clickup_dashboard_url: dashboardUrl,
+    })
     .eq("id", sub.id);
   if (updateErr) throw updateErr;
 
-  return { folderId: folder.id, folderUrl, usedTemplate: Boolean(templateId) };
+  return {
+    folderId: folder.id,
+    folderUrl,
+    dashboardViewId,
+    dashboardUrl,
+    usedTemplate: Boolean(templateId),
+  };
 }

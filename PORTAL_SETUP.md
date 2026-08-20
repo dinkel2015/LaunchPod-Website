@@ -14,11 +14,10 @@ The site stays static — no Next.js, no build step.
 | Checkout | `POST /api/checkout` | **verified against Square sandbox** |
 | Recurring billing | `GET /api/billing/charge-cycle` (daily cron) | **verified against Square sandbox** |
 | Plan changes | `POST /api/plan-change` | **verified** |
-| ClickUp provisioning | `POST /api/clickup/provision` | written, **untested — needs an API token** |
+| ClickUp provisioning | `POST /api/clickup/provision` | **verified against the live workspace** |
 
-Everything except ClickUp has been run end to end against Square sandbox and the
-live Supabase project: 42/42 checks, plus 18/18 unit tests. ClickUp provisioning
-is written but has never called the API — it needs a token.
+The whole chain has been run end to end against Square sandbox, the live Supabase
+project and the live ClickUp workspace: **54/54 checks**, plus 18/18 unit tests.
 
 **Node 22 is required.** `@supabase/supabase-js` uses native WebSocket, which
 Node 20 does not have; `createClient` throws on construction there.
@@ -123,17 +122,26 @@ discount checkout would then refuse. They now go through
 not express at all. Codes are still managed directly in the Supabase table
 editor — no UI.
 
-**ClickUp has two hard API limits** (both verified, both documented in
-`api/_lib/clickup.js`):
+**ClickUp — corrected findings.** An earlier note here said dashboards were
+entirely absent from the API. That is true only of *standalone* Dashboards.
+Folder-scoped dashboard **views** can be both listed and created
+(`GET`/`POST /folder/{id}/view` with `type: "dashboard"`), verified against this
+workspace. Every real client folder has one named `<Client> Client Dashboard`;
+neither template folder does. Provisioning now reuses a template-supplied
+dashboard view if present and otherwise creates one, matching the convention.
 
-- There is no "duplicate this folder" endpoint. The API can only create a folder
-  from a *saved Folder Template*. `Client Template Folder` (`901318206130`) is a
-  plain folder, so it can't be a duplication source until it's saved as a
-  template in the ClickUp UI (**this is the chosen approach** — see below).
-  With `CLICKUP_FOLDER_TEMPLATE_ID` unset, provisioning falls back to building
-  the folder and only the lists the package path needs.
-- Dashboards aren't in the public API at all. `clickup_dashboard_url` currently
-  holds the client's **folder** URL, which is the closest shareable equivalent.
+What the API will *not* do is populate the dashboard's widgets — a created
+dashboard view arrives empty. The cards have to be added once in the UI, or
+carried across by a working folder template.
+
+There is still no "duplicate this folder" endpoint; the API can only build from
+a *saved Folder Template*.
+
+Neither the folder nor the view API returns a URL, so the client-facing link is
+**constructed**: `https://app.clickup.com/{team}/v/dsh/{viewId}`. That shape has
+not been confirmed in a browser — open one from a client's dashboard and compare.
+The raw view id is stored in `subscriptions.clickup_dashboard_view_id`, so if the
+shape is wrong it is a single UPDATE to fix rather than a re-provision.
 
 **TOS acceptances are immutable.** Database rules block UPDATE and DELETE. The
 full rendered text is stored, not a boolean — including the "pending Michael's
@@ -207,3 +215,37 @@ The key now includes the attempt date and the amount, which fixes both while
 preserving the guarantee it exists for: two runs on the same day, same cycle,
 same price collapse to one charge. That is asserted explicitly in the harness —
 both runs return the same Square payment id.
+
+## Blocking issue: the ClickUp token cannot see the template folders
+
+`CLICKUP_FOLDER_TEMPLATE_ID` is deliberately left unset, because the saved
+template `t-901313605624` ("Client Folder Template") is rejected:
+
+```
+400 CTEMP_004 — "You would not have access to the folder created by this template"
+```
+
+The cause is a permission scope, not a bug. The personal token
+(`pk_50816150_…`, John Dinkel) gets **401 Unauthorized** on all three template
+folders:
+
+| Folder | id | via personal token |
+|---|---|---|
+| Onboarding Templates | 901318711999 | 401 |
+| Client 1 Template | 901313342105 | 401 |
+| Client Template Folder | 901318206130 | 401 |
+
+They are intact — confirmed still present through a differently-authenticated
+client — just invisible to this token. The same restriction is what makes the
+template unusable, since ClickUp refuses to build a folder the caller could not
+then open.
+
+To switch provisioning onto the template, share those folders with the token's
+account in ClickUp (or issue a token whose scope includes them), confirm
+`GET /folder/901318206130` returns 200, then set `CLICKUP_FOLDER_TEMPLATE_ID`.
+
+Until then the fallback runs, and it works: it creates the folder and exactly
+the lists the package path needs — `Onboarding` + `PostCast` for a Postcast
+client, plus `SEO Optimization` when the Web Pod is on — matching how the real
+Doba and SubBase folders are laid out. It just cannot carry across the template's
+tasks or dashboard widgets.

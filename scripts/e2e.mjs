@@ -73,10 +73,35 @@ const api = (path, body, token) =>
     body: JSON.stringify(body),
   }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
 
+/* A run that throws part-way through must not strand a test client, a
+   promo code or a ClickUp folder. Registered before anything is created
+   so an early failure still tidies up. */
+async function cleanup() {
+  if (cleanedUp) return;
+  cleanedUp = true;
+  try {
+    if (userId) {
+      await db.rpc("e2e_purge_client", { p_client: userId });
+      await db.auth.admin.deleteUser(userId);
+    }
+    await db.from("promo_codes").delete().like("code", `E2E%${stamp}`);
+    if (clickupFolderId && process.env.CLICKUP_API_TOKEN) {
+      await fetch(`https://api.clickup.com/api/v2/folder/${clickupFolderId}`, {
+        method: "DELETE", headers: { Authorization: process.env.CLICKUP_API_TOKEN },
+      });
+    }
+  } catch (e) {
+    console.error("cleanup failed; check for leftovers:", e.message);
+  }
+}
+
 const stamp = Date.now();
 const email = `e2e-${stamp}@launchpodmedia.com`;
 const password = "e2e-Password-9!";
-let userId, token, created = [];
+let userId, token, created = [], clickupFolderId = null, cleanedUp = false;
+
+process.on("uncaughtException", async (e) => { console.error("\nrun crashed:", e.message); await cleanup(); process.exit(1); });
+process.on("unhandledRejection", async (e) => { console.error("\nrun crashed:", e?.message ?? e); await cleanup(); process.exit(1); });
 
 /* A confirmed user, created via the Admin API so the run does not depend
    on email confirmation being switched off. */
@@ -109,6 +134,19 @@ const selection = (over = {}) => ({
 
 const tos = { text: "LAUNCHPOD MEDIA STANDARD SERVICE AGREEMENT\n\nE2E test document body.", rev: "2026-07-28" };
 
+/* The harness seeds its own promo codes and deletes them at the end, so
+   it never depends on rows already in the table — and never leaves a
+   working discount code behind in a live database. Run-stamped names
+   keep concurrent runs from colliding. */
+const CODE_FLAT     = `E2EFLAT${stamp}`;
+const CODE_EXPIRED  = `E2EEXP${stamp}`;
+const CODE_INACTIVE = `E2EOFF${stamp}`;
+await db.from("promo_codes").insert([
+  { code: CODE_FLAT,     discount_type: "flat",    amount: 25000, active: true },
+  { code: CODE_EXPIRED,  discount_type: "percent", amount: 500,   active: true, expires_at: new Date(Date.now() - 86400000).toISOString() },
+  { code: CODE_INACTIVE, discount_type: "percent", amount: 1500,  active: false },
+]);
+
 console.log(`\nE2E run ${stamp} — user ${email}\n`);
 
 console.log("AUTH + CONFIG");
@@ -118,15 +156,15 @@ check("/api/config serves public ids only", Boolean(cfg.squareApplicationId && c
 check("/api/config leaks no secret", !JSON.stringify(cfg).includes(process.env.SQUARE_ACCESS_TOKEN));
 
 console.log("\nPROMO VALIDATION");
-const good = await api("/api/promo/validate", { code: "SAVE250" }, token);
+const good = await api("/api/promo/validate", { code: CODE_FLAT }, token);
 check("valid flat code accepted", good.data.valid === true, JSON.stringify(good.data.promo));
-const expired = await api("/api/promo/validate", { code: "EXPIRED5" }, token);
+const expired = await api("/api/promo/validate", { code: CODE_EXPIRED }, token);
 check("expired code rejected", expired.data.valid === false);
-const inactive = await api("/api/promo/validate", { code: "OFF" }, token);
+const inactive = await api("/api/promo/validate", { code: CODE_INACTIVE }, token);
 check("inactive code rejected", inactive.data.valid === false);
 const unknown = await api("/api/promo/validate", { code: "NOPE" }, token);
 check("unknown code rejected", unknown.data.valid === false);
-const noAuth = await api("/api/promo/validate", { code: "SAVE250" });
+const noAuth = await api("/api/promo/validate", { code: CODE_FLAT });
 check("promo validation requires auth", noAuth.status === 401);
 
 console.log("\nCHECKOUT — tampering");
@@ -145,7 +183,7 @@ check("checkout requires auth", unauth.status === 401);
 console.log("\nCHECKOUT — real charge");
 const out = await api("/api/checkout", {
   selection: selection(), sourceId: "cnon:card-nonce-ok",
-  promoCode: "SAVE250", tos, payment: { name: "E2E Runner", zip: "84103" },
+  promoCode: CODE_FLAT, tos, payment: { name: "E2E Runner", zip: "84103" },
 }, token);
 check("checkout succeeded", out.status === 200, JSON.stringify(out.data).slice(0, 160));
 
@@ -172,8 +210,41 @@ check("full TOS text stored verbatim", acc?.document_text === tos.text);
 check("TOS sha256 recorded", Boolean(acc?.document_sha256));
 check("TOS path matches the package", acc?.path === "postcast");
 
-const { data: promoRow } = await db.from("promo_codes").select("times_used").eq("code", "SAVE250").single();
+const { data: promoRow } = await db.from("promo_codes").select("times_used").eq("code", CODE_FLAT).single();
 check("promo usage incremented", promoRow?.times_used === 1, `times_used=${promoRow?.times_used}`);
+
+console.log("\nCLICKUP PROVISIONING");
+if (!process.env.CLICKUP_API_TOKEN) {
+  console.log("  SKIP  no CLICKUP_API_TOKEN set");
+} else {
+  const cu = async (p, o = {}) => {
+    const r = await fetch(`https://api.clickup.com/api/v2${p}`, {
+      ...o, headers: { Authorization: process.env.CLICKUP_API_TOKEN, "Content-Type": "application/json", ...o.headers },
+    });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  };
+  check("checkout reported provisioning succeeded", out.data.clickupProvisioned === true);
+  check("checkout returned a dashboard url", Boolean(out.data.dashboardUrl), out.data.dashboardUrl);
+
+  const { data: cuRow } = await db.from("subscriptions")
+    .select("clickup_folder_id, clickup_dashboard_url, clickup_dashboard_view_id").eq("id", subId).single();
+  check("folder id stored on the subscription", Boolean(cuRow?.clickup_folder_id), cuRow?.clickup_folder_id);
+  check("dashboard view id stored", Boolean(cuRow?.clickup_dashboard_view_id), cuRow?.clickup_dashboard_view_id);
+
+  clickupFolderId = cuRow?.clickup_folder_id;
+  const folder = await cu(`/folder/${clickupFolderId}`);
+  check("folder exists in ClickUp", folder.status === 200, folder.body?.name);
+  check("folder is in the Delivery space", folder.body?.space?.id === process.env.CLICKUP_DELIVERY_SPACE_ID);
+
+  const names = (folder.body.lists || []).map((l) => l.name.split(": ").pop());
+  check("postcast path got Onboarding + PostCast", names.includes("Onboarding") && names.includes("PostCast"), names.join(", "));
+  check("web pod added an SEO Optimization list", names.includes("SEO Optimization"));
+
+  const views = await cu(`/folder/${clickupFolderId}/view`);
+  const dash = (views.body.views || []).find((v) => v.type === "dashboard");
+  check("a dashboard view exists on the folder", Boolean(dash), dash?.name);
+  check("stored view id matches the real one", dash?.id === cuRow?.clickup_dashboard_view_id);
+}
 
 console.log("\nPLAN CHANGE");
 const change = await api("/api/plan-change", {
@@ -266,7 +337,18 @@ await db.rpc("e2e_purge_client", { p_client: userId });
 const { count } = await db.from("subscriptions").select("id", { count: "exact", head: true }).eq("client_id", userId);
 check("test rows purged", (count ?? 0) === 0, `${count ?? "?"} subscriptions left`);
 try { await db.auth.admin.deleteUser(userId); } catch { /* already gone */ }
-await db.from("promo_codes").update({ times_used: 0 }).eq("code", "SAVE250");
+const { error: promoDelErr } = await db.from("promo_codes").delete().in("code", [CODE_FLAT, CODE_EXPIRED, CODE_INACTIVE]);
+check("seeded promo codes removed", !promoDelErr, promoDelErr?.message ?? "");
+
+if (clickupFolderId) {
+  const del = await fetch(`https://api.clickup.com/api/v2/folder/${clickupFolderId}`, {
+    method: "DELETE", headers: { Authorization: process.env.CLICKUP_API_TOKEN },
+  });
+  check("test ClickUp folder removed", del.status === 200, `status ${del.status}`);
+  clickupFolderId = null;
+}
+cleanedUp = true;
+
 
 server.close();
 console.log(`\n${pass} passed, ${fail} failed\n`);
