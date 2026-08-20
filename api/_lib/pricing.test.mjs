@@ -86,8 +86,10 @@ test("server PRICING constants match portal.html verbatim", () => {
 
 /* Drive the client function the way the portal does: by mutating the
    global `state` it closes over. */
-function clientCompute(sel, paymentPlan, promoKey) {
-  client.state = { pkg: { ...sel, paymentPlan, promoApplied: promoKey ?? null } };
+function clientCompute(sel, paymentPlan, promo) {
+  // promo mirrors what /api/promo/validate returns:
+  // { code, discountType: 'percent'|'flat', amount } — bps or cents.
+  client.state = { pkg: { ...sel, paymentPlan, promoApplied: promo ?? null } };
   client.auditPrice = client.PRICING.AUDIT_PRICE_DEFAULT;
   return client.computePricing();
 }
@@ -184,7 +186,7 @@ test("percent promo codes reproduce the portal's additive stacking", () => {
   const theirs = clientCompute(
     { ...sel, paymentPlan: undefined },
     "full_year",
-    "partner_referral",
+    { code: "partner10", discountType: "percent", amount: 1000 },
   );
   assert.equal(mine.chargedToday, theirs.chargedToday);
   assert.equal(mine.recurringTotal, theirs.recurringTotal);
@@ -239,4 +241,28 @@ test("validateSelection rejects out-of-table values instead of producing NaN", (
     assert.throws(() => validateSelection(sel), /ValidationError|invalid|unknown/,
       `expected rejection for ${JSON.stringify(sel)}`);
   }
+});
+
+test("flat promo codes agree between the portal and the server", () => {
+  const raw = {
+    path: "webicast",
+    launch: { episodes: 10, lengthMin: 45, scripting: false, location: "lpm" },
+    orbit: { tier: "standard", voice: "1" },
+    pods: {
+      web: { enabled: true, freq: "4", transcripts: true, embeddedPlayers: false, embeddedVideo: false, blogLength: "801" },
+      social: { enabled: true, clips: 4 },
+      production: { enabled: false, freq: 4 },
+      boost: { enabled: false, adsPerMo: 1, adSpend: 0 },
+    },
+    paymentPlan: "six_months",
+  };
+  const promoDb = { discount_type: "flat", amount: 25000 };            // $250 in cents
+  const promoUi = { code: "save250", discountType: "flat", amount: 25000 };
+
+  const mine = serverCompute(validateSelection(raw), promoDb);
+  const theirs = clientCompute(raw, "six_months", promoUi);
+
+  assert.equal(mine.chargedToday, theirs.chargedToday);
+  assert.equal(mine.recurringTotal, theirs.recurringTotal);
+  assert.ok(mine.discAmount > 0);
 });

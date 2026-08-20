@@ -151,12 +151,224 @@ const state = {
   tosAccepted: false,
   pay: { name: "", zip: "" }, // card fields intentionally NOT modeled here — see Payment step TODO
   onboarding: { date: null, time: null, booked: false },
-  // TODO: once the ClickUp handoff exists, this gets populated from the
-  // server response after checkout (see "ClickUp handoff" TODO below).
+  payError: "",
+  subscriptionId: null,
+  // What the server actually charged, in cents. Set from /api/checkout's
+  // response; the server is authoritative, the local preview is not.
+  chargedTodayCents: null,
+  // Set from the subscription row after checkout — /api/clickup/provision
+  // writes it there. Null until provisioning has run.
   clickupDashboardUrl: null,
 };
 
 const auditPrice = PRICING.AUDIT_PRICE_DEFAULT;
+
+// ---------------------------------------------------------------------
+// BACKEND — Supabase Auth + /api integration
+//
+// Deliberately no Supabase JS bundle: its auth surface is a handful of
+// REST calls, and plain fetch keeps this file's "no external runtime"
+// property intact. The Square Web Payments SDK is the one unavoidable
+// dependency — card fields must live inside Square's iframe so raw card
+// data never touches this origin.
+//
+// Public ids come from /api/config rather than being hardcoded, so
+// sandbox and production differ only by Vercel env vars.
+// ---------------------------------------------------------------------
+const SESSION_KEY = "lpm.session";
+
+const backend = {
+  config: null,
+  session: null,   // { access_token, refresh_token, expires_at, user }
+  card: null,      // Square card instance
+  busy: false,
+};
+
+async function loadConfig() {
+  if (backend.config) return backend.config;
+  const res = await fetch("/api/config");
+  if (!res.ok) throw new Error("Portal configuration is unavailable. Please try again shortly.");
+  backend.config = await res.json();
+  return backend.config;
+}
+
+function saveSession(session) {
+  backend.session = session;
+  try {
+    if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    else localStorage.removeItem(SESSION_KEY);
+  } catch { /* private browsing — session stays in memory only */ }
+}
+
+function loadStoredSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw) backend.session = JSON.parse(raw);
+  } catch { backend.session = null; }
+}
+
+/* Supabase Auth REST. Errors come back as {error_description|msg|error}. */
+async function authFetch(path, body) {
+  const cfg = await loadConfig();
+  const res = await fetch(`${cfg.supabaseUrl}/auth/v1/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: cfg.supabaseAnonKey },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error_description || data.msg || data.error || "Authentication failed.");
+  }
+  return data;
+}
+
+/* Refreshes an expired access token before it is used. Supabase access
+   tokens are short-lived; without this a client who leaves the tab open
+   gets a spurious "session expired" at the payment step. */
+async function accessToken() {
+  const s = backend.session;
+  if (!s) return null;
+  const expiresAt = (s.expires_at || 0) * 1000;
+  if (expiresAt && Date.now() > expiresAt - 60_000 && s.refresh_token) {
+    try {
+      const refreshed = await authFetch("token?grant_type=refresh_token", { refresh_token: s.refresh_token });
+      saveSession(refreshed);
+      return refreshed.access_token;
+    } catch {
+      saveSession(null);
+      return null;
+    }
+  }
+  return s.access_token;
+}
+
+async function api(path, body) {
+  const token = await accessToken();
+  if (!token) throw new Error("Your session has expired. Please sign in again.");
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Something went wrong. Please try again.");
+  return data;
+}
+
+/* Reads the client's existing subscription straight from PostgREST under
+   their own JWT — RLS restricts this to their own rows. */
+async function fetchSubscription() {
+  const cfg = await loadConfig();
+  const token = await accessToken();
+  if (!token) return null;
+  const res = await fetch(
+    `${cfg.supabaseUrl}/rest/v1/subscriptions?select=*&order=created_at.desc&limit=1`,
+    { headers: { apikey: cfg.supabaseAnonKey, Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows[0] || null;
+}
+
+/* Rehydrates the wizard/dashboard from a stored subscription. `selection`
+   is persisted in exactly the shape of state.pkg, so it slots straight
+   back in without a translation layer. */
+function applySubscription(sub) {
+  if (!sub) { state.hasPackage = false; return; }
+  state.hasPackage = true;
+  state.pkg = { ...state.pkg, ...sub.selection, promoCodeInput: "", promoApplied: null, promoError: false };
+  state.clickupDashboardUrl = sub.clickup_dashboard_url || null;
+  state.subscriptionId = sub.id;
+}
+
+// ---------------------------------------------------------------------
+// SQUARE WEB PAYMENTS
+// ---------------------------------------------------------------------
+/* Sandbox and production serve the SDK from different hosts, so the tag
+   is injected once /api/config says which environment this is. */
+function loadSquareSdk(env) {
+  if (window.Square) return Promise.resolve();
+  const src = env === "production"
+    ? "https://web.squarecdn.com/v1/square.js"
+    : "https://sandbox.web.squarecdn.com/v1/square.js";
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) { existing.addEventListener("load", resolve); existing.addEventListener("error", reject); return; }
+    const tag = document.createElement("script");
+    tag.src = src;
+    tag.onload = resolve;
+    tag.onerror = () => reject(new Error("Could not load Square."));
+    document.head.appendChild(tag);
+  });
+}
+
+async function mountSquareCard() {
+  const container = document.getElementById("square-card-container");
+  if (!container || backend.card) return;
+
+  try {
+    const cfg = await loadConfig();
+    await loadSquareSdk(cfg.squareEnv);
+    if (!window.Square) throw new Error("Square could not be reached.");
+    const payments = window.Square.payments(cfg.squareApplicationId, cfg.squareLocationId);
+    const card = await payments.card();
+    container.innerHTML = "";
+    container.style.border = "1px solid rgba(255,255,255,.14)";
+    container.style.color = "#fff";
+    await card.attach("#square-card-container");
+    backend.card = card;
+    backend.payments = payments;
+  } catch (e) {
+    container.innerHTML = `<span style="color:#FF2EA0">Card entry is unavailable: ${e.message}</span>`;
+  }
+}
+
+/* Tokenizes the card. Square returns a single-use token plus, for SCA
+   flows, a verification token that must accompany it. */
+async function tokenizeCard(amountCents) {
+  if (!backend.card) throw new Error("Card details aren't ready yet.");
+  const result = await backend.card.tokenize();
+  if (result.status !== "OK") {
+    throw new Error(result.errors?.[0]?.message || "Please check your card details.");
+  }
+
+  let verificationToken;
+  try {
+    const verify = await backend.payments.verifyBuyer(result.token, {
+      amount: (amountCents / 100).toFixed(2),
+      currencyCode: "USD",
+      intent: "CHARGE_AND_STORE",
+      billingContact: { postalCode: state.pay.zip || undefined },
+    });
+    verificationToken = verify?.token;
+  } catch {
+    // verifyBuyer is only required for SCA-regulated cards; a failure
+    // here must not block an otherwise valid US card.
+  }
+  return { sourceId: result.token, verificationToken };
+}
+
+/* The TOS text as the client actually saw it — path-conditional, and
+   including the "pending Michael's confirmation" disclaimers, since
+   those were part of the document presented. Stored verbatim as the
+   legal record of what was agreed to. */
+function renderedTosText(path) {
+  const holder = document.createElement("div");
+  /* Insert a break at every block boundary before reading textContent —
+     otherwise adjacent elements concatenate ("...AGREEMENTThese Terms...")
+     and the stored record, which is what gets read back in a dispute,
+     comes out as one unbroken wall of text. */
+  holder.innerHTML = renderTosDocument(path)
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|li|tr|section)>/gi, "\n\n");
+  return holder.textContent
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+const TOS_REV = "2026-07-28";
 
 // ---------------------------------------------------------------------
 // PRICING CALCULATIONS
@@ -197,9 +409,21 @@ function computePricing() {
 
   const discountable = entryMonthly + webMonthly + socialMonthly + productionMonthly + boostMgmt;
   const planDiscount = (PRICING.DISCOUNTS.find(d => d.key === pkg.paymentPlan) || {}).rate || 0;
-  const promoDiscount = pkg.promoApplied ? (PRICING.DISCOUNTS.find(d => d.key === pkg.promoApplied) || {}).rate || 0 : 0;
-  const discPct = planDiscount + promoDiscount;
-  const discAmount = discountable * discPct;
+  const planDiscountAmt = discountable * planDiscount;
+
+  /* promoApplied is whatever /api/promo/validate returned — a real row
+     from the promo_codes table, which may be a percentage (basis points)
+     or a flat amount (cents). It is NOT a key into PRICING.DISCOUNTS:
+     that list is payment-plan terms, and matching codes against it made
+     the preview disagree with what checkout would charge. */
+  const promo = pkg.promoApplied;
+  const promoDiscountAmt = !promo ? 0
+    : promo.discountType === "percent" ? discountable * (promo.amount / 10000)
+    : promo.amount / 100;
+
+  // Mirrors the server: additive, but never more than the base, so a
+  // large flat code cannot render a negative total.
+  const discAmount = Math.min(planDiscountAmt + promoDiscountAmt, discountable);
 
   const recurringTotal = orbitMonthly + discountable - discAmount + boostAdSpend;
   const chargedToday = path === "launch"
@@ -220,10 +444,10 @@ function computePricing() {
   if (production.enabled) lineItems.push({ label: "Production Pod", amount: fmt(productionMonthly) + "/mo" });
   if (boost.enabled) lineItems.push({ label: "Boost Pod mgmt", amount: fmt(boostMgmt) + "/mo" });
   if (boost.enabled) lineItems.push({ label: "Boost ad spend (passthrough)", amount: fmt(boostAdSpend) + "/mo" });
-  if (discPct > 0) {
+  if (discAmount > 0) {
     const labels = [];
     if (planDiscount) labels.push(PRICING.DISCOUNTS.find(d => d.key === pkg.paymentPlan).label);
-    if (promoDiscount) labels.push(PRICING.DISCOUNTS.find(d => d.key === pkg.promoApplied).label);
+    if (promo) labels.push(`Code ${promo.code.toUpperCase()}`);
     lineItems.push({ label: `Discount (${labels.join(" + ")})`, amount: "−" + fmt(discAmount) });
   }
 
@@ -235,7 +459,16 @@ function computePricing() {
 // RENDER HELPERS
 // ---------------------------------------------------------------------
 const root = document.getElementById("lpm-root");
-function render() { root.innerHTML = renderScreen(); bindEvents(); }
+function render() {
+  root.innerHTML = renderScreen();
+  bindEvents();
+  // The card iframe must be attached after the step's markup exists, and
+  // re-attached whenever a re-render replaces the container.
+  if (state.screen === "wizard") {
+    const steps = stepsFor(state.pkg.path);
+    if (steps[state.wizardStep] === "payment") mountSquareCard();
+  }
+}
 
 function pill(active, extra) {
   return `cursor:pointer;padding:14px 12px;border-radius:12px;text-align:center;transition:all .15s ease;border:1px solid ${active ? "rgba(110,43,242,.8)" : "rgba(255,255,255,.12)"};background:${active ? "linear-gradient(160deg,rgba(110,43,242,.32),rgba(18,200,216,.14))" : "rgba(255,255,255,.03)"};font:500 13px "Instrument Sans",sans-serif;color:#fff${extra || ""}`;
@@ -274,11 +507,7 @@ function renderAuth() {
         ${isLogin ? renderLoginForm() : renderSignupForm()}
       </div>
       <div style="text-align:center;font:400 11px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.3);margin-top:18px">
-        <!-- TODO(auth): wire to Supabase Auth (propdoc already has a Supabase
-             project — reuse it or spin up a "clients" table + auth there).
-             Until then this is UI only: no account is actually created or
-             verified, and nothing persists across a reload. -->
-        Backend not connected yet — sign in is a UI placeholder.
+        Secured by Supabase Auth.
       </div>
     </div>
   </div>`;
@@ -592,7 +821,7 @@ function renderStepDiscounts() {
       <input type="text" id="promoCodeInput" placeholder="Enter code" value="${pkg.promoCodeInput}" style="flex:1;box-sizing:border-box;padding:13px 14px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.16);color:#fff;font:400 14px 'Instrument Sans',sans-serif"/>
       <button data-action="applyPromoCode" style="cursor:pointer;font:600 13px 'Instrument Sans',sans-serif;color:#fff;padding:0 20px;border-radius:10px;border:1px solid rgba(255,255,255,.2);background:transparent">Apply</button>
     </div>
-    ${pkg.promoApplied ? `<div style="font:500 13px 'Instrument Sans',sans-serif;margin-top:10px;color:#12C8D8">✓ "${pkg.promoApplied}" applied</div>` : pkg.promoError ? `<div style="font:500 13px 'Instrument Sans',sans-serif;margin-top:10px;color:#FF2EA0">Code not recognized.</div>` : ""}`;
+    ${pkg.promoApplied ? `<div style="font:500 13px 'Instrument Sans',sans-serif;margin-top:10px;color:#12C8D8">✓ "${pkg.promoApplied.code.toUpperCase()}" applied — ${pkg.promoApplied.discountType === "percent" ? (pkg.promoApplied.amount / 100) + "% off" : fmt(pkg.promoApplied.amount / 100) + " off"}</div>` : pkg.promoError ? `<div style="font:500 13px 'Instrument Sans',sans-serif;margin-top:10px;color:#FF2EA0">Code not recognized.</div>` : ""}`;
 }
 
 function renderStepReview(p) {
@@ -782,16 +1011,12 @@ function renderStepTos() {
 }
 
 function renderStepPayment() {
-  /* TODO(square): Mount Square Web Payments SDK's card element into
-     #square-card-container. This needs:
-       1. Add a Square Web Payments SDK script tag (web.squarecdn.com/v1/square.js) to <head>
-       2. Square Application ID + Location ID (public, safe to hardcode
-          client-side — NOT the secret key) once you provide them.
-       3. A server-side /api/checkout route that takes the resulting
-          nonce/token and calls Square's Payments API with the SECRET
-          key. That key must never appear in this file or any client JS.
-     Until that's wired, this step is deliberately non-functional —
-     it does not collect or transmit card data. */
+  /* Card fields are mounted into #square-card-container by
+     mountSquareCard(), called from render() whenever this step is on
+     screen. The fields live inside Square's own iframe, so raw card data
+     never touches this origin or this file. Tokenization happens on
+     "Next" (see handleAction -> goNext), and the charge itself is made
+     server-side by /api/checkout with the secret access token. */
   return `
     <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">Payment.</h2>
     <p style="font:400 15px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 24px">Securely processed by Square. Your card is saved for recurring monthly billing.</p>
@@ -805,6 +1030,7 @@ function renderStepPayment() {
         <div id="square-card-container" style="padding:14px;border-radius:10px;background:rgba(255,255,255,.04);border:1px dashed rgba(255,255,255,.25);color:rgba(255,255,255,.4);font:400 13px 'Instrument Sans',sans-serif">Square Web Payments SDK mounts here (not yet connected — see code comment).</div>
         <input type="text" id="payZip" placeholder="Billing ZIP" value="${state.pay.zip}" style="${inputStyle}"/>
       </div>
+      ${state.payError ? `<div style="margin-top:16px;padding:12px 14px;border-radius:10px;background:rgba(255,46,160,.12);border:1px solid rgba(255,46,160,.45);font:500 13px 'Instrument Sans',sans-serif;color:#FF2EA0">${state.payError}</div>` : ""}
       <div style="display:flex;align-items:center;gap:8px;margin-top:16px;font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.4)"><span>🔒</span>Card data handled entirely by Square — never touches LPM servers.</div>
     </div>`;
 }
@@ -814,7 +1040,7 @@ function renderStepSuccess(p) {
     <div style="text-align:center;padding:40px 0;max-width:480px;margin:0 auto">
       <div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(140deg,#FF2EA0,#6E2BF2 55%,#12C8D8);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;font-size:28px">✓</div>
       <h2 style="font:600 30px 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 12px">You're booked in.</h2>
-      <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.65);margin:0 0 30px">${fmt(p.chargedToday)} was processed today. Next, grab a time for your onboarding call so we can kick things off.</p>
+      <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.65);margin:0 0 30px">${fmt(state.chargedTodayCents != null ? state.chargedTodayCents / 100 : p.chargedToday)} was processed today. Next, grab a time for your onboarding call so we can kick things off.</p>
       <button data-action="goToDashboard" style="border:none;cursor:pointer;font:600 15px 'Instrument Sans',sans-serif;color:#08060f;padding:15px 30px;border-radius:100px;background:#fff">Go to my dashboard →</button>
     </div>`;
 }
@@ -851,14 +1077,10 @@ function renderDashboard() {
             <p style="font:400 14px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 16px">Live task status, files, and your account team's chat — same dashboard your account manager sees, just for you.</p>
             <a href="${state.clickupDashboardUrl}" target="_blank" style="display:inline-block;font:600 14px 'Instrument Sans',sans-serif;color:#08060f;padding:12px 22px;border-radius:100px;background:#fff">Open your production dashboard →</a>
           ` : `
-            <!-- TODO(clickup): once checkout succeeds, a serverless function
-                 should duplicate the "Client Template Folder" into the
-                 Delivery space in ClickUp (workspace 90132069393), seed it
-                 with the onboarding list(s) matching this client's path
-                 (New/Existing Podcast, WebiCast, or PostCast onboarding,
-                 per PRICING.LAUNCH_EPISODE_OPTIONS etc.), grant the client
-                 guest access to its Dashboard view, and store that
-                 Dashboard's URL — set it as state.clickupDashboardUrl. -->
+            <!-- Provisioned by /api/clickup/provision right after checkout.
+                 If it is still empty here, provisioning failed after a
+                 successful charge — the route is idempotent and can be
+                 re-run by hand for this subscription id. -->
             <p style="font:400 14px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">Your production dashboard will appear here once your account is set up in ClickUp.</p>
           `}
         </div>
@@ -941,29 +1163,78 @@ function setPath(path, value) {
   obj[parts[parts.length - 1]] = value;
 }
 
-function handleAction(action, value) {
+/* Runs an async action with a busy flag so a double-click cannot fire two
+   checkouts, and funnels failures into a caller-supplied error setter
+   rather than an unhandled rejection. */
+async function withBusy(fn, onError) {
+  if (backend.busy) return;
+  backend.busy = true;
+  render();
+  try {
+    await fn();
+  } catch (e) {
+    onError(e.message || "Something went wrong.");
+  } finally {
+    backend.busy = false;
+  }
+}
+
+async function handleAction(action, value) {
   const pkg = state.pkg;
+  if (backend.busy) return;
   switch (action) {
     case "goLogin": state.screen = "login"; state.loginError = ""; break;
     case "goSignup": state.screen = "signup"; break;
-    case "doLogin":
-      // TODO(auth): replace with a real Supabase Auth sign-in call.
+    case "doLogin": {
       if (!state.loginEmail || !state.loginPassword) { state.loginError = "Enter your email and password."; break; }
       state.loginError = "";
-      state.screen = state.hasPackage ? "dashboard" : "wizard";
+      await withBusy(async () => {
+        const session = await authFetch("token?grant_type=password", {
+          email: state.loginEmail, password: state.loginPassword,
+        });
+        saveSession(session);
+        state.loginPassword = "";
+        applySubscription(await fetchSubscription());
+        state.screen = state.hasPackage ? "dashboard" : "wizard";
+      }, (msg) => { state.loginError = msg; });
       break;
+    }
     case "doSignup": {
-      // TODO(auth): replace with a real Supabase Auth sign-up call.
       const a = state.auth;
       if (!a.name || !a.company || !a.email || !a.password) { a.error = "Please fill in all fields."; break; }
       if (a.password.length < 8) { a.error = "Password must be at least 8 characters."; break; }
       if (a.password !== a.confirm) { a.error = "Passwords do not match."; break; }
       a.error = "";
-      state.loginEmail = a.email;
-      state.screen = "wizard";
+      await withBusy(async () => {
+        const session = await authFetch("signup", {
+          email: a.email,
+          password: a.password,
+          data: { name: a.name, company: a.company },
+        });
+        state.loginEmail = a.email;
+        a.password = ""; a.confirm = "";
+
+        /* With email confirmation switched on, signup returns a user but
+           no session. Say so rather than dropping them into a wizard
+           they cannot check out from. */
+        if (!session.access_token) {
+          a.error = "Check your email to confirm your account, then sign in.";
+          state.screen = "login";
+          return;
+        }
+        saveSession(session);
+        state.screen = "wizard";
+      }, (msg) => { a.error = msg; });
       break;
     }
-    case "doLogout": state.screen = "login"; break;
+    case "doLogout":
+      saveSession(null);
+      state.hasPackage = false;
+      state.clickupDashboardUrl = null;
+      state.subscriptionId = null;
+      backend.card = null;
+      state.screen = "login";
+      break;
     case "setPath": pkg.path = value; break;
     case "setLaunchEpisodes": pkg.launch.episodes = Number(value); break;
     case "setLaunchLength": pkg.launch.lengthMin = Number(value); break;
@@ -985,10 +1256,13 @@ function handleAction(action, value) {
     case "setBoostAds": pkg.pods.boost.adsPerMo = Number(value); break;
     case "setPaymentPlan": pkg.paymentPlan = value; break;
     case "applyPromoCode": {
-      const code = (pkg.promoCodeInput || "").trim().toLowerCase().replace(/\s+/g, "_");
-      const found = PRICING.DISCOUNTS.find(d => d.key === code && (code === "partner_referral" || code === "employee"));
-      if (found) { pkg.promoApplied = found.key; pkg.promoError = false; }
-      else { pkg.promoApplied = null; pkg.promoError = true; }
+      const code = (pkg.promoCodeInput || "").trim();
+      if (!code) { pkg.promoApplied = null; pkg.promoError = true; break; }
+      await withBusy(async () => {
+        const result = await api("/api/promo/validate", { code });
+        if (result.valid) { pkg.promoApplied = result.promo; pkg.promoError = false; }
+        else { pkg.promoApplied = null; pkg.promoError = true; }
+      }, () => { pkg.promoApplied = null; pkg.promoError = true; });
       break;
     }
     case "toggleTosAccept": state.tosAccepted = !state.tosAccepted; break;
@@ -996,12 +1270,39 @@ function handleAction(action, value) {
     case "goNext": {
       const steps = stepsFor(pkg.path);
       const stepId = steps[Math.min(state.wizardStep, steps.length - 1)];
+
       if (stepId === "payment") {
-        // TODO(square): this is where the real charge happens — call
-        // /api/checkout with the Square nonce, wait for success, THEN
-        // advance. Right now it advances unconditionally with no charge.
-        state.hasPackage = true;
+        /* The charge must succeed before the wizard advances — an
+           unconditional advance here would show a client a success
+           screen for a card that was declined. */
+        const price = computePricing();
+        let ok = false;
+        await withBusy(async () => {
+          const { sourceId, verificationToken } = await tokenizeCard(Math.round(price.chargedToday * 100));
+          const result = await api("/api/checkout", {
+            selection: {
+              path: pkg.path, launch: pkg.launch, orbit: pkg.orbit,
+              pods: pkg.pods, paymentPlan: pkg.paymentPlan,
+            },
+            promoCode: pkg.promoApplied ? pkg.promoApplied.code : null,
+            sourceId, verificationToken,
+            payment: { name: state.pay.name, zip: state.pay.zip },
+            tos: { text: renderedTosText(pkg.path), rev: TOS_REV },
+          });
+          state.hasPackage = true;
+          state.subscriptionId = result.subscriptionId;
+          state.clickupDashboardUrl = result.dashboardUrl || null;
+          /* The server is authoritative on price; show what was actually
+             charged rather than the local preview. */
+          state.chargedTodayCents = result.chargedTodayCents;
+          backend.card = null;
+          ok = true;
+        }, (msg) => { state.payError = msg; });
+
+        if (!ok) break;
+        state.payError = "";
       }
+
       state.wizardStep += 1;
       break;
     }
@@ -1011,7 +1312,32 @@ function handleAction(action, value) {
   render();
 }
 
-render();
+// ---------------------------------------------------------------------
+// BOOT
+// ---------------------------------------------------------------------
+/* Restore a stored session before the first paint so a reload lands the
+   client back on their dashboard rather than the sign-in screen. Render
+   immediately either way — waiting on the network to draw anything would
+   leave the page blank if Supabase is slow. */
+async function boot() {
+  loadStoredSession();
+  render();
+
+  if (!backend.session) return;
+  try {
+    const token = await accessToken();
+    if (!token) { render(); return; }
+    applySubscription(await fetchSubscription());
+    state.screen = state.hasPackage ? "dashboard" : "wizard";
+  } catch {
+    // A dead session just means they sign in again.
+    saveSession(null);
+    state.screen = "login";
+  }
+  render();
+}
+
+boot();
 </script>
 </body>
 </html>

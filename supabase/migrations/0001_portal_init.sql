@@ -271,3 +271,32 @@ $$;
 
 revoke all on function public.release_promo_code(uuid) from public, anon, authenticated;
 grant execute on function public.release_promo_code(uuid) to service_role;
+
+-- =====================================================================
+-- peek_promo_code — validate WITHOUT consuming.
+--
+-- Backs the portal's "apply code" button so the on-screen preview agrees
+-- with what checkout will actually do. Deliberately separate from
+-- redeem_promo_code: previewing a code must not burn a usage against its
+-- cap. Returns the code's shape, or nothing if it is unusable.
+-- =====================================================================
+create or replace function public.peek_promo_code(p_code text)
+returns table (code text, discount_type public.discount_type, amount integer)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select pc.code, pc.discount_type, pc.amount
+    from public.promo_codes pc
+   where lower(pc.code) = lower(trim(p_code))
+     and pc.active
+     and (pc.expires_at is null or pc.expires_at > now())
+     and (pc.usage_cap is null or pc.times_used < pc.usage_cap)
+   limit 1;
+$$;
+
+-- Still service_role only. Exposing this to `authenticated` would let a
+-- signed-in client brute-force the code space.
+revoke all on function public.peek_promo_code(text) from public, anon, authenticated;
+grant execute on function public.peek_promo_code(text) to service_role;
