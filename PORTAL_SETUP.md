@@ -22,9 +22,16 @@ them as unverified until they have.
 
 ## Setup
 
-1. **Create the Supabase project** (`lpm-portal`, separate from PropDoc's), then
-   send me the project ref and I'll apply
-   `supabase/migrations/0001_portal_init.sql` and verify RLS.
+1. **Supabase — done.** Project `lpm-portal` (`hdcoddhfrglbdpopdcur`, us-west-2).
+   Both migrations are applied and the schema is verified against the live
+   database: RLS isolates clients from each other, `promo_codes` is unreadable
+   to `anon` and `authenticated`, the promo functions reject non-`service_role`
+   callers, the usage cap holds, and TOS acceptances survive UPDATE and DELETE.
+   The database is empty — all test rows were removed.
+
+   `SUPABASE_URL` is `https://hdcoddhfrglbdpopdcur.supabase.co`.
+   Use the **anon** key (the `eyJ...` JWT) for `SUPABASE_ANON_KEY`; the
+   service_role key is in Project Settings → API and goes in Vercel only.
 
 2. **Set the Vercel env vars** listed in `.env.example`. Secrets
    (`SUPABASE_SERVICE_ROLE_KEY`, `SQUARE_ACCESS_TOKEN`, `CLICKUP_API_TOKEN`,
@@ -128,3 +135,16 @@ otherwise land on a new client's board looking overdue on day one.
   stays as the fallback.
 - **Admin tooling / promo UI** — none for v1, by decision. Supabase's table
   editor plus ClickUp directly is the admin surface.
+
+## Why there is a migration 0002
+
+`tos_acceptances` was originally made immutable with `DO INSTEAD NOTHING`
+rules. Rules rewrite statements — including the ones Postgres issues internally
+to maintain foreign keys — so deleting a subscription fired `ON DELETE SET NULL`
+against a protected row, the rule swallowed it, and the delete failed with an
+opaque `XX000: referential integrity query ... gave unexpected result`. Any
+subscription with a signed agreement became undeletable with no usable error.
+
+0002 replaces the rules with triggers that raise a real message, and moves the
+`subscription_id` foreign key to `ON DELETE RESTRICT` so the constraint is
+enforced honestly. Immutability is unchanged — it just fails legibly now.

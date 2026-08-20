@@ -157,6 +157,8 @@ create table public.tos_acceptances (
 create index tos_acceptances_client_idx on public.tos_acceptances (client_id);
 
 -- Acceptances are an immutable legal record: no updates, no deletes.
+-- NOTE: these rules are REPLACED by triggers in 0002 — they broke
+-- Postgres's own foreign-key maintenance. Kept here as applied history.
 create rule tos_acceptances_no_update as
   on update to public.tos_acceptances do instead nothing;
 create rule tos_acceptances_no_delete as
@@ -168,6 +170,7 @@ create rule tos_acceptances_no_delete as
 create or replace function public.touch_updated_at()
 returns trigger
 language plpgsql
+set search_path = ''
 as $$
 begin
   new.updated_at := now();
@@ -240,7 +243,7 @@ create or replace function public.redeem_promo_code(p_code text)
 returns table (id uuid, discount_type public.discount_type, amount integer)
 language sql
 security definer
-set search_path = public
+set search_path = ''
 as $$
   update public.promo_codes pc
      set times_used = pc.times_used + 1
@@ -262,7 +265,7 @@ create or replace function public.release_promo_code(p_id uuid)
 returns void
 language sql
 security definer
-set search_path = public
+set search_path = ''
 as $$
   update public.promo_codes
      set times_used = greatest(times_used - 1, 0)
@@ -285,7 +288,7 @@ returns table (code text, discount_type public.discount_type, amount integer)
 language sql
 stable
 security definer
-set search_path = public
+set search_path = ''
 as $$
   select pc.code, pc.discount_type, pc.amount
     from public.promo_codes pc
