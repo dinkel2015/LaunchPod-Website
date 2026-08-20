@@ -192,29 +192,80 @@ console.log("\nRECURRING BILLING");
 const cronBad = await fetch(`${BASE}/api/billing/charge-cycle`, { headers: { Authorization: "Bearer wrong" } });
 check("cron rejects a wrong secret", cronBad.status === 401);
 
-// Force this subscription due today so the sweep picks it up.
-await db.from("subscriptions").update({ next_charge_on: new Date().toISOString().slice(0, 10) }).eq("id", subId);
-const cron = await fetch(`${BASE}/api/billing/charge-cycle`, {
+const today = new Date().toISOString().slice(0, 10);
+const runCron = () => fetch(`${BASE}/api/billing/charge-cycle`, {
   headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
 }).then((r) => r.json());
-const charged = (cron.charged ?? []).find((c) => c.id === subId);
+
+/* Pass 1: the subscription is due, but the plan change is not. The cycle
+   must be charged at the OLD price and the change left pending — this is
+   the guarantee that an upgrade cannot bill early. */
+await db.from("subscriptions").update({ next_charge_on: today }).eq("id", subId);
+const cron1 = await runCron();
+
+const charged = (cron1.charged ?? []).find((c) => c.id === subId);
 check("cron charged the saved card", Boolean(charged), JSON.stringify(charged));
-const appliedChange = (cron.applied_changes ?? []).find((c) => c.id === subId);
-check("cron applied the due plan change", Boolean(appliedChange), JSON.stringify(appliedChange));
+check("charged the OLD price, not the pending upgrade",
+  charged?.cents === 305000, `charged ${charged?.cents}, old price 305000, upgrade 570000`);
+check("a not-yet-effective plan change is NOT applied",
+  !(cron1.applied_changes ?? []).some((c) => c.id === subId));
+
+const { data: stillPending } = await db.from("plan_changes")
+  .select("status").eq("subscription_id", subId).maybeSingle();
+check("plan change still pending after the early cycle", stillPending?.status === "pending");
 
 const { data: after } = await db.from("subscriptions").select("*").eq("id", subId).single();
-check("next_charge_on advanced past today",
-  after?.next_charge_on > new Date().toISOString().slice(0, 10), after?.next_charge_on);
+check("next_charge_on advanced past today", after?.next_charge_on > today, after?.next_charge_on);
 check("last_charged_at recorded", Boolean(after?.last_charged_at));
 
+/* The guarantee the key exists for: a cron that fires twice in one day
+   for the same cycle at the same price must charge exactly once. */
+await db.from("subscriptions").update({ next_charge_on: charged.cycle }).eq("id", subId);
+const cronDup = await runCron();
+const dup = (cronDup.charged ?? []).find((c) => c.id === subId);
+check("same-day double-fire does not double-charge",
+  dup?.paymentId === charged?.paymentId,
+  `first ${charged?.paymentId}, second ${dup?.paymentId}`);
+
+/* Pass 2: fast-forward to the cycle the change is effective on. Now it
+   must be applied AND the new price charged. */
+await db.from("subscriptions").update({ next_charge_on: today }).eq("id", subId);
+
+/* Simulate the 30 days having passed. requested_at must move back too:
+   the plan_change_min_notice CHECK requires effective_at > requested_at,
+   so setting effective_at to today alone is rejected by the database —
+   which is the constraint working, not a bug. */
+const backdated = new Date(Date.now() - 31 * 86400000).toISOString();
+const { error: ffErr } = await db.from("plan_changes")
+  .update({ requested_at: backdated, effective_at: today })
+  .eq("subscription_id", subId).eq("status", "pending");
+check("fast-forwarding the plan change respects the notice constraint", !ffErr, ffErr?.message ?? "");
+
+const cron2 = await runCron();
+
+const applied = (cron2.applied_changes ?? []).find((c) => c.id === subId);
+check("an effective plan change IS applied", Boolean(applied), JSON.stringify(applied));
+const charged2 = (cron2.charged ?? []).find((c) => c.id === subId);
+check("charges the NEW price once effective",
+  charged2?.cents === 570000, `charged ${charged2?.cents}, expected 570000`);
+
+const { data: post } = await db.from("subscriptions").select("recurring_cents, selection").eq("id", subId).single();
+check("subscription recurring_cents updated to the new plan", post?.recurring_cents === 570000);
+check("subscription selection swapped to the new plan",
+  post?.selection?.pods?.social?.enabled === true && post?.selection?.pods?.social?.clips === 8);
+
+const { data: doneChange } = await db.from("plan_changes").select("status, applied_at").eq("subscription_id", subId).maybeSingle();
+check("plan change marked applied", doneChange?.status === "applied" && Boolean(doneChange?.applied_at));
+
 console.log("\nCLEANUP");
-// tos_acceptances is immutable by trigger; disable it to remove test rows.
-await db.rpc("e2e_cleanup", { p_client: userId }).catch(() => {});
-await db.from("plan_changes").delete().eq("subscription_id", subId);
-const { error: delErr } = await db.from("subscriptions").delete().eq("id", subId);
-check("test subscription removed (or blocked by the TOS FK, which is correct)",
-  true, delErr ? `FK held: ${delErr.code}` : "deleted");
-await db.auth.admin.deleteUser(userId).catch(() => {});
+/* tos_acceptances is immutable by trigger and its FK is RESTRICT, so the
+   subscription cannot be deleted while an acceptance points at it. That
+   is the intended production behaviour; for a test run the trigger is
+   lifted just long enough to drop the rows this run created. */
+await db.rpc("e2e_purge_client", { p_client: userId });
+const { count } = await db.from("subscriptions").select("id", { count: "exact", head: true }).eq("client_id", userId);
+check("test rows purged", (count ?? 0) === 0, `${count ?? "?"} subscriptions left`);
+try { await db.auth.admin.deleteUser(userId); } catch { /* already gone */ }
 await db.from("promo_codes").update({ times_used: 0 }).eq("code", "SAVE250");
 
 server.close();

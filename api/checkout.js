@@ -19,7 +19,7 @@
 import { createHash } from "node:crypto";
 import { validateSelection, computePricing, ValidationError } from "./_lib/pricing.js";
 import { serviceClient, requireUser } from "./_lib/supabase.js";
-import { squareClient, locationId, money, plain } from "./_lib/square.js";
+import { squareClient, locationId, money, plain, idempotencyKey } from "./_lib/square.js";
 import { addMonthsClamped, toDateString } from "./_lib/billing.js";
 import { provisionClient } from "./_lib/clickup.js";
 import { json, fail, methodGuard, readBody } from "./_lib/http.js";
@@ -135,14 +135,14 @@ export default async function handler(req, res) {
 
     /* ---- 3. Square: customer -> card on file -> charge ---- */
     const { customer } = await square.customers.create({
-      idempotencyKey: `cust-${user.id}`,
+      idempotencyKey: idempotencyKey("cu", user.id),
       emailAddress: user.email,
       companyName: payment?.company || undefined,
       referenceId: user.id,
     });
 
     const { card } = await square.cards.create({
-      idempotencyKey: `card-${subscriptionId}`,
+      idempotencyKey: idempotencyKey("ca", subscriptionId),
       sourceId,
       verificationToken,
       card: {
@@ -157,7 +157,7 @@ export default async function handler(req, res) {
     let paymentId = null;
     if (price.chargedTodayCents > 0) {
       const { payment: made } = await square.payments.create({
-        idempotencyKey: `pay-${subscriptionId}`,
+        idempotencyKey: idempotencyKey("pa", subscriptionId),
         sourceId: card.id,
         customerId: customer.id,
         locationId: locationId(),

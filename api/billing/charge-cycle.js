@@ -16,7 +16,7 @@
 
 import { computePricing, validateSelection } from "../_lib/pricing.js";
 import { serviceClient } from "../_lib/supabase.js";
-import { squareClient, locationId, money, plain } from "../_lib/square.js";
+import { squareClient, locationId, money, plain, cycleIdempotencyKey } from "../_lib/square.js";
 import { addMonthsClamped, parseDate, toDateString, nextCycleAfter } from "../_lib/billing.js";
 import { json, methodGuard, bearerToken, requireEnv } from "../_lib/http.js";
 
@@ -93,11 +93,17 @@ export default async function handler(req, res) {
         continue;
       }
 
-      /* The idempotency key is pinned to (subscription, cycle date), so a
-         retried or double-fired cron run charges that cycle exactly once
-         — Square returns the original payment instead of a second one. */
+      /* Two runs on the same day for the same cycle at the same price
+         collapse to a single charge; a next-day retry after a decline,
+         or a cycle whose price moved because a plan change landed, gets
+         a fresh key. See cycleIdempotencyKey for why both matter. */
       const { payment } = await square.payments.create({
-        idempotencyKey: `cycle-${sub.id}-${cycleDate}`,
+        idempotencyKey: cycleIdempotencyKey({
+          subscriptionId: sub.id,
+          cycleDate,
+          attemptDate: todayStr,
+          cents: recurringCents,
+        }),
         sourceId: sub.square_card_id,
         customerId: sub.square_customer_id,
         locationId: locationId(),

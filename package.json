@@ -4,7 +4,8 @@
   "type": "module",
   "description": "Serverless functions for the LaunchPod Media client portal. The site itself is static HTML; this package exists only for /api.",
   "scripts": {
-    "test": "node --test api/_lib/"
+    "test": "node --test api/_lib/*.test.mjs",
+    "e2e": "node --env-file=.env scripts/e2e.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
