@@ -126,6 +126,14 @@ function fmt(n) {
   return "$" + n.toLocaleString("en-US");
 }
 function lengthBucket(len) { return len >= 90 ? "90plus" : String(len); }
+/* Billing dates are plain 'YYYY-MM-DD'. Split them rather than passing to
+   the Date constructor, which reads a bare date as UTC and can render the
+   previous day for anyone west of Greenwich. */
+function fmtDate(ymd) {
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
 
 // ---------------------------------------------------------------------
 // STATE
@@ -153,6 +161,8 @@ const state = {
   onboarding: { date: null, time: null, booked: false },
   payError: "",
   subscriptionId: null,
+  // Populated from the subscription row after checkout / on reload.
+  billing: { brand: null, last4: null, nextChargeOn: null },
   // What the server actually charged, in cents. Set from /api/checkout's
   // response; the server is authoritative, the local preview is not.
   chargedTodayCents: null,
@@ -279,6 +289,11 @@ function applySubscription(sub) {
   state.pkg = { ...state.pkg, ...sub.selection, promoCodeInput: "", promoApplied: null, promoError: false };
   state.clickupDashboardUrl = sub.clickup_dashboard_url || null;
   state.subscriptionId = sub.id;
+  state.billing = {
+    brand: sub.square_card_brand || null,
+    last4: sub.square_card_last4 || null,
+    nextChargeOn: sub.next_charge_on || null,
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -1103,7 +1118,18 @@ function renderDashboard() {
       <div style="display:flex;flex-direction:column;gap:20px">
         <div style="padding:28px;border-radius:20px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09)">
           <div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:16px">PAYMENT METHOD</div>
-          <p style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">Not connected yet — see Payment step TODO.</p>
+          ${state.billing.last4 ? `
+            <div style="display:flex;align-items:center;gap:12px">
+              <div style="flex:none;width:38px;height:26px;border-radius:5px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16)"></div>
+              <div>
+                <div style="font:600 15px 'Space Grotesk',sans-serif">${state.billing.brand || "Card"} ····&thinsp;${state.billing.last4}</div>
+                <div style="font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5);margin-top:2px">Saved for recurring billing</div>
+              </div>
+            </div>
+            ${state.billing.nextChargeOn ? `<div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6)">Next charge ${fmtDate(state.billing.nextChargeOn)}</div>` : ""}
+          ` : `
+            <p style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">No card on file yet.</p>
+          `}
         </div>
         <div style="padding:22px;border-radius:16px;background:rgba(18,200,216,.06);border:1px solid rgba(18,200,216,.3)">
           <div style="font:600 14px 'Space Grotesk',sans-serif;margin-bottom:6px">Need help?</div>
@@ -1232,6 +1258,7 @@ async function handleAction(action, value) {
       state.hasPackage = false;
       state.clickupDashboardUrl = null;
       state.subscriptionId = null;
+      state.billing = { brand: null, last4: null, nextChargeOn: null };
       backend.card = null;
       state.screen = "login";
       break;
@@ -1295,6 +1322,11 @@ async function handleAction(action, value) {
           /* The server is authoritative on price; show what was actually
              charged rather than the local preview. */
           state.chargedTodayCents = result.chargedTodayCents;
+          state.billing = {
+            brand: result.cardBrand || null,
+            last4: result.cardLast4 || null,
+            nextChargeOn: result.nextChargeOn || null,
+          };
           backend.card = null;
           ok = true;
         }, (msg) => { state.payError = msg; });

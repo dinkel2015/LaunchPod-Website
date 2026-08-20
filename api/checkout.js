@@ -176,6 +176,10 @@ export default async function handler(req, res) {
         square_customer_id: customer.id,
         square_card_id: card.id,
         square_payment_id: paymentId,
+        // Display only — shown on the dashboard so the client can see
+        // which card is on file without a round trip to Square.
+        square_card_brand: card.cardBrand ?? null,
+        square_card_last4: card.last4 ?? null,
         last_charged_at: paymentId ? new Date().toISOString() : null,
       })
       .eq("id", subscriptionId);
@@ -201,6 +205,10 @@ export default async function handler(req, res) {
       recurringCents: price.recurringCents,
       billingAnchor: toDateString(anchor),
       nextChargeOn: toDateString(addMonthsClamped(anchor, 1)),
+      // Display only, so the dashboard can show the saved card straight
+      // after checkout without re-reading the subscription.
+      cardBrand: card.cardBrand ?? null,
+      cardLast4: card.last4 ?? null,
     });
   } catch (e) {
     await releasePromo();

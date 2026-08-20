@@ -19,6 +19,19 @@ The site stays static — no Next.js, no build step.
 The whole chain has been run end to end against Square sandbox, the live Supabase
 project and the live ClickUp workspace: **54/54 checks**, plus 18/18 unit tests.
 
+It has also been driven by hand through the actual portal UI in a browser —
+account creation, wizard, Terms, Square's real card iframe, checkout, success
+screen, dashboard, and reload — against those same live services. The one step
+no automation could perform is typing into Square's cross-origin PCI iframe;
+that is verified through the API instead (`cnon:card-nonce-ok`), and the iframe
+itself is confirmed to mount and render with the real Application ID.
+
+Run the portal locally against real services with:
+
+```bash
+node --env-file=.env scripts/dev-server.mjs
+```
+
 **Node 22 is required.** `@supabase/supabase-js` uses native WebSocket, which
 Node 20 does not have; `createClient` throws on construction there.
 
@@ -81,23 +94,19 @@ project — so what it verifies is the shipping code path, not a re-implementati
 It creates a throwaway client per run and cleans up after itself. Needs a local
 `.env` (gitignored) including `SUPABASE_SERVICE_ROLE_KEY`.
 
-## Blocking issue: email confirmation
+## Email confirmation — resolved
 
-Signup is currently **impossible** on this project. Email confirmation is on, and
-Supabase's built-in SMTP is rate-limited to a handful of messages per hour — it
-is explicitly not for production use. Every signup attempt during testing failed
-with `over_email_send_rate_limit`, and `auth.users` stayed empty.
+"Confirm email" is **off**, so signup returns a session immediately and the
+client goes straight into the wizard. Verified through the portal UI end to end.
 
-Two ways forward, in Authentication → Providers → Email:
+If it is ever switched back on, configure custom SMTP at the same time (Resend
+or Postmark). Supabase's built-in sender is rate-limited to a handful of messages
+an hour and is not for production — with it, signup fails outright. The portal
+handles both cases: with confirmation on it tells the client to confirm and sign
+in rather than dropping them into a wizard they cannot check out from.
 
-1. **Turn off "Confirm email"** for v1. Signup returns a session immediately and
-   the client goes straight into the wizard. Fastest path to launch.
-2. **Configure custom SMTP** (Resend or Postmark). Needed anyway if checkout is
-   ever going to send a receipt — the handoff left that provider undecided.
-
-The portal already handles both cases: with confirmation on it tells the client
-to confirm and sign in rather than dropping them into a wizard they cannot check
-out from.
+Custom SMTP is worth setting up regardless if checkout should ever send a
+receipt, which the original handoff left undecided.
 
 ## Things worth knowing
 
