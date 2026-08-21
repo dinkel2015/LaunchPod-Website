@@ -1250,6 +1250,7 @@ async function handleAction(action, value) {
         }
         saveSession(session);
         state.screen = "wizard";
+        applyPathFromQuery();   // keep any ?path= they arrived with
       }, (msg) => { a.error = msg; });
       break;
     }
@@ -1351,8 +1352,22 @@ async function handleAction(action, value) {
    client back on their dashboard rather than the sign-in screen. Render
    immediately either way — waiting on the network to draw anything would
    leave the page blank if Supabase is slow. */
+/* The marketing site links in as /portal?path=postcast etc, so a visitor
+   who clicked "Get started" from a product page lands on that package
+   already chosen rather than back at "Choose how you start". Anything
+   unrecognised is ignored — this is a URL a stranger can edit. */
+function applyPathFromQuery() {
+  const wanted = new URLSearchParams(location.search).get("path");
+  const allowed = ["launch", "postcast", "webicast", "audit"];
+  if (!wanted || !allowed.includes(wanted)) return;
+  state.pkg.path = wanted;
+  // Skip "Choose path" only because the choice was already made for them.
+  state.wizardStep = 1;
+}
+
 async function boot() {
   loadStoredSession();
+  applyPathFromQuery();
   render();
 
   if (!backend.session) return;
