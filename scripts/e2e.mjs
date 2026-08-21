@@ -24,12 +24,20 @@ if (missing.length) {
 }
 process.env.CRON_SECRET ||= "e2e-local-cron-secret";
 
+/* Point at a deployed environment instead of the local shim with:
+     E2E_BASE_URL=https://…vercel.app node --env-file=.env scripts/e2e.mjs
+   Vercel preview URLs sit behind SSO, so a protection-bypass secret can
+   be supplied via E2E_BYPASS and is sent with every request. */
+const REMOTE = process.env.E2E_BASE_URL?.replace(/\/$/, "") || null;
 const PORT = 4011;
-const BASE = `http://127.0.0.1:${PORT}`;
+const BASE = REMOTE ?? `http://127.0.0.1:${PORT}`;
+const EXTRA_HEADERS = process.env.E2E_BYPASS
+  ? { "x-vercel-protection-bypass": process.env.E2E_BYPASS, "x-vercel-set-bypass-cookie": "false" }
+  : {};
 const U = process.env.SUPABASE_URL;
 const K = process.env.SUPABASE_ANON_KEY;
 
-const routes = {
+const routes = REMOTE ? {} : {
   "/api/config": (await import("../api/config.js")).default,
   "/api/checkout": (await import("../api/checkout.js")).default,
   "/api/plan-change": (await import("../api/plan-change.js")).default,
@@ -57,7 +65,8 @@ const server = createServer(async (req, res) => {
     if (!res.headersSent) { res.statusCode = 500; res.end(JSON.stringify({ error: String(e) })); }
   }
 });
-await new Promise((r) => server.listen(PORT, r));
+if (!REMOTE) await new Promise((r) => server.listen(PORT, r));
+else console.log(`testing DEPLOYED build at ${REMOTE}`);
 
 const db = createClient(U, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
@@ -69,7 +78,7 @@ const check = (name, ok, detail = "") => {
 const api = (path, body, token) =>
   fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { "Content-Type": "application/json", ...EXTRA_HEADERS, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(body),
   }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
 
@@ -151,7 +160,7 @@ console.log(`\nE2E run ${stamp} — user ${email}\n`);
 
 console.log("AUTH + CONFIG");
 check("signed in and got an access token", Boolean(token));
-const cfg = await fetch(`${BASE}/api/config`).then((r) => r.json());
+const cfg = await fetch(`${BASE}/api/config`, { headers: EXTRA_HEADERS }).then((r) => r.json());
 check("/api/config serves public ids only", Boolean(cfg.squareApplicationId && cfg.supabaseUrl));
 check("/api/config leaks no secret", !JSON.stringify(cfg).includes(process.env.SQUARE_ACCESS_TOKEN));
 
@@ -260,12 +269,12 @@ const { data: pc } = await db.from("plan_changes").select("*").eq("subscription_
 check("pending plan_changes row written", Boolean(pc));
 
 console.log("\nRECURRING BILLING");
-const cronBad = await fetch(`${BASE}/api/billing/charge-cycle`, { headers: { Authorization: "Bearer wrong" } });
+const cronBad = await fetch(`${BASE}/api/billing/charge-cycle`, { headers: { ...EXTRA_HEADERS, Authorization: "Bearer wrong" } });
 check("cron rejects a wrong secret", cronBad.status === 401);
 
 const today = new Date().toISOString().slice(0, 10);
 const runCron = () => fetch(`${BASE}/api/billing/charge-cycle`, {
-  headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+  headers: { ...EXTRA_HEADERS, Authorization: `Bearer ${process.env.CRON_SECRET}` },
 }).then((r) => r.json());
 
 /* Pass 1: the subscription is due, but the plan change is not. The cycle
@@ -350,6 +359,6 @@ if (clickupFolderId) {
 cleanedUp = true;
 
 
-server.close();
+if (!REMOTE) server.close();
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
