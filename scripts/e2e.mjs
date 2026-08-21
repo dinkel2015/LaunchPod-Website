@@ -26,6 +26,14 @@ process.env.CRON_SECRET ||= "e2e-local-cron-secret";
 
 /* Point at a deployed environment instead of the local shim with:
      E2E_BASE_URL=https://…vercel.app node --env-file=.env scripts/e2e.mjs
+
+   Use the exact host the site is served from — for production that is
+   https://www.launchpodmedia.com, not the apex. The apex 308-redirects
+   to www, and a cross-host redirect drops the Authorization header per
+   the fetch spec, so every authenticated call comes back "Missing bearer
+   token". Visitors never hit this: the page itself loads from www, so
+   its relative /api calls are already same-origin.
+
    Vercel preview URLs sit behind SSO, so a protection-bypass secret can
    be supplied via E2E_BYPASS and is sent with every request. */
 const REMOTE = process.env.E2E_BASE_URL?.replace(/\/$/, "") || null;
