@@ -235,7 +235,7 @@ template `t-901313605624` ("Client Folder Template") is rejected:
 ```
 
 The cause is a permission scope, not a bug. The personal token
-(`pk_50816150_…`, John Dinkel) gets **401 Unauthorized** on all three template
+(John's personal token) gets **401 Unauthorized** on all three template
 folders:
 
 | Folder | id | via personal token |
