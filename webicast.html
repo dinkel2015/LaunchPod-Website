@@ -404,8 +404,8 @@
 
 <script>
 (function () {
-  /* Pricing for the on-page calculator. Keep in sync with api/_lib/pricing.js
-     once Webicast checkout moves to per-episode pricing. */
+  /* Pricing for the on-page calculator. Must match PRICING.WEBICAST in
+     api/_lib/pricing.js and portal.html, which is what checkout charges. */
   var PRICING = { base: 1000, baseEpisodes: 2, perExtraEpisode: 250, customAbove: 12 };
   var WATCH_RATE = 0.61; // Contrast 2026: 61% of registrants watch live or on demand
 
@@ -494,7 +494,7 @@
     out("perEp", r.custom ? "Quoted" : money(r.price / r.produced));
     var cta = $("#planCta");
     cta.textContent = r.custom ? "Talk to us about your plan" : "Get started at " + money(r.price) + "/mo";
-    cta.href = r.custom ? "https://calendly.com/dinkel" : "/portal?path=webicast&episodes=" + r.produced;
+    cta.href = r.custom ? "https://calendly.com/dinkel" : "/portal?path=webicast&minutes=" + state.len + "&perMonth=" + state.freq + "&cadence=" + state.cad;
 
     if (state.calculated) {
       out("watched", num(r.watched) + "*");

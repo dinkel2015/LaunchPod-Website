@@ -47,6 +47,7 @@ const K = process.env.SUPABASE_ANON_KEY;
 
 const routes = REMOTE ? {} : {
   "/api/config": (await import("../api/config.js")).default,
+  "/api/account": (await import("../api/account.js")).default,
   "/api/checkout": (await import("../api/checkout.js")).default,
   "/api/plan-change": (await import("../api/plan-change.js")).default,
   "/api/promo/validate": (await import("../api/promo/validate.js")).default,
@@ -120,20 +121,21 @@ let userId, token, created = [], clickupFolderId = null, cleanedUp = false;
 process.on("uncaughtException", async (e) => { console.error("\nrun crashed:", e.message); await cleanup(); process.exit(1); });
 process.on("unhandledRejection", async (e) => { console.error("\nrun crashed:", e?.message ?? e); await cleanup(); process.exit(1); });
 
-/* A confirmed user, created via the Admin API so the run does not depend
-   on email confirmation being switched off. */
-const { data: made, error: makeErr } = await db.auth.admin.createUser({
-  email, password, email_confirm: true,
-  user_metadata: { name: "E2E Runner", company: `E2E ${stamp}` },
-});
-if (makeErr) { console.error("could not create test user:", makeErr); process.exit(1); }
-userId = made.user.id;
+/* The account is created the way the portal creates it at checkout:
+   through /api/account, then a password sign-in. */
+const madeAcct = await api("/api/account", { name: "E2E Runner", company: `E2E ${stamp}`, email, password });
+if (madeAcct.status !== 201) { console.error("could not create test user:", madeAcct.data); process.exit(1); }
 
 const login = await fetch(`${U}/auth/v1/token?grant_type=password`, {
   method: "POST", headers: { "Content-Type": "application/json", apikey: K },
   body: JSON.stringify({ email, password }),
 }).then((r) => r.json());
 token = login.access_token;
+userId = login.user?.id;
+if (!token || !userId) { console.error("could not sign in the new account:", login); process.exit(1); }
+
+const againAcct = await api("/api/account", { name: "E2E Runner", company: `E2E ${stamp}`, email, password: "a-different-pass-1" });
+check("account at checkout: an existing email is refused, not overwritten", againAcct.status === 409, againAcct.data.error);
 
 const selection = (over = {}) => ({
   path: "postcast",

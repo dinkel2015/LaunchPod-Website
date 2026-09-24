@@ -18,7 +18,20 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import vm from "node:vm";
 
-import { computePricing as serverCompute, validateSelection, PRICING as SERVER_PRICING } from "./pricing.js";
+import {
+  computePricing as serverCompute, validateSelection, PRICING as SERVER_PRICING,
+  webicastEpisodes, webicastMonthly,
+} from "./pricing.js";
+
+function everyWebicastPlan() {
+  const W = SERVER_PRICING.WEBICAST;
+  const out = [];
+  for (const webinarMinutes of W.WEBINAR_MINUTES)
+    for (const webinarsPerMonth of W.WEBINARS_PER_MONTH)
+      for (const releaseCadence of W.RELEASE_CADENCES)
+        out.push({ webinarMinutes, webinarsPerMonth, releaseCadence });
+  return out;
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const portalPath = join(here, "..", "..", "portal.html");
@@ -62,7 +75,7 @@ test("server PRICING constants match portal.html verbatim", () => {
     "HOST_ADDERS", "LAUNCH_BASE_PRICES", "LAUNCH_LENGTH_MULTIPLIERS",
     "SCRIPT_RATES_PER_EPISODE", "WEB_BASE_RATES", "WEB_ADDON_RATES",
     "SOCIAL_CLIP_RATES", "PRODUCTION_RATES", "BOOST_AD_RATES",
-    "POSTCAST_MONTHLY", "WEBICAST_MONTHLY", "AUDIT_PRICE_DEFAULT",
+    "POSTCAST_MONTHLY", "WEBICAST", "AUDIT_PRICE_DEFAULT",
   ];
   // vm-context objects have a different realm's prototype, so compare
   // by value rather than by deepStrictEqual's reference-equal check.
@@ -103,6 +116,7 @@ function* everySelection() {
   const tiers = Object.keys(P.ORBIT_TIERS);
   const voices = Object.keys(P.HOST_ADDERS);
   const plans = ["monthly", "full_year", "six_months"];
+  const webicastOptions = everyWebicastPlan().filter((w) => webicastEpisodes(w) <= P.WEBICAST.MAX_EPISODES);
   let n = 0;
 
   for (const path of ["launch", "postcast", "webicast", "audit"]) {
@@ -130,6 +144,7 @@ function* everySelection() {
                             production: { enabled: prodOn, freq: P.PRODUCTION_FREQ_OPTIONS[n % P.PRODUCTION_FREQ_OPTIONS.length] },
                             boost:      { enabled: boostOn, adsPerMo: P.BOOST_AD_OPTIONS[n % P.BOOST_AD_OPTIONS.length], adSpend: 500 },
                           },
+                          webicast: webicastOptions[n % webicastOptions.length],
                           paymentPlan: plans[n % plans.length],
                         };
                       }
@@ -254,6 +269,7 @@ test("flat promo codes agree between the portal and the server", () => {
       production: { enabled: false, freq: 4 },
       boost: { enabled: false, adsPerMo: 1, adSpend: 0 },
     },
+    webicast: { webinarMinutes: 60, webinarsPerMonth: 1, releaseCadence: "weekly" },
     paymentPlan: "six_months",
   };
   const promoDb = { discount_type: "flat", amount: 25000 };            // $250 in cents
@@ -265,4 +281,69 @@ test("flat promo codes agree between the portal and the server", () => {
   assert.equal(mine.chargedToday, theirs.chargedToday);
   assert.equal(mine.recurringTotal, theirs.recurringTotal);
   assert.ok(mine.discAmount > 0);
+});
+
+const WEBICAST_BASE_SEL = {
+  path: "webicast",
+  launch: { episodes: 10, lengthMin: 45, scripting: false, location: "lpm" },
+  orbit: { tier: "standard", voice: "1" },
+  pods: {
+    web: { enabled: false, freq: "4", transcripts: false, embeddedPlayers: false, embeddedVideo: false, blogLength: "none" },
+    social: { enabled: false, clips: 4 },
+    production: { enabled: false, freq: 4 },
+    boost: { enabled: false, adsPerMo: 1, adSpend: 0 },
+  },
+  paymentPlan: "monthly",
+};
+
+test("Webicast is priced monthly by the content sent, matching the marketing page", () => {
+  // The table published on webicast.html's calculator.
+  const expected = [
+    [30, 1, 2, 1000], [45, 1, 3, 1250], [60, 1, 4, 1500], [90, 1, 6, 2000],
+    [60, 2, 8, 2500], [60, 3, 12, 3500],
+  ];
+  for (const [webinarMinutes, webinarsPerMonth, eps, price] of expected) {
+    const webicast = { webinarMinutes, webinarsPerMonth, releaseCadence: "weekly" };
+    assert.equal(webicastEpisodes(webicast), eps, `${webinarMinutes}m x${webinarsPerMonth} episodes`);
+    assert.equal(webicastMonthly(webicast), price, `${webinarMinutes}m x${webinarsPerMonth} price`);
+    const out = serverCompute(validateSelection({ ...WEBICAST_BASE_SEL, webicast }), null);
+    assert.equal(out.chargedToday, price);
+    assert.equal(out.recurringTotal, price);
+  }
+});
+
+test("server and portal agree on every sellable Webicast plan", () => {
+  let checked = 0;
+  for (const webicast of everyWebicastPlan()) {
+    if (webicastEpisodes(webicast) > SERVER_PRICING.WEBICAST.MAX_EPISODES) continue;
+    for (const paymentPlan of ["monthly", "full_year", "six_months"]) {
+      const sel = { ...WEBICAST_BASE_SEL, webicast, paymentPlan };
+      const mine = serverCompute(validateSelection(sel), null);
+      const theirs = clientCompute(sel, paymentPlan, null);
+      assert.equal(mine.chargedToday, theirs.chargedToday, JSON.stringify(sel));
+      assert.equal(mine.recurringTotal, theirs.recurringTotal, JSON.stringify(sel));
+      checked++;
+    }
+  }
+  assert.ok(checked > 0);
+});
+
+test("Webicast plans above the episode cap, or with unknown options, are refused", () => {
+  const bad = [
+    { webinarMinutes: 90, webinarsPerMonth: 3, releaseCadence: "weekly" },   // 18 episodes: custom quote
+    { webinarMinutes: 90, webinarsPerMonth: 4, releaseCadence: "weekly" },   // 24 episodes
+    { webinarMinutes: 20, webinarsPerMonth: 1, releaseCadence: "weekly" },
+    { webinarMinutes: 60, webinarsPerMonth: 9, releaseCadence: "weekly" },
+    { webinarMinutes: 60, webinarsPerMonth: 1, releaseCadence: "daily" },
+    undefined,
+  ];
+  for (const webicast of bad) {
+    assert.throws(() => validateSelection({ ...WEBICAST_BASE_SEL, webicast }), /invalid|custom quote/,
+      `expected rejection for ${JSON.stringify(webicast)}`);
+  }
+});
+
+test("non-Webicast paths ignore Webicast inputs", () => {
+  const sel = validateSelection({ ...WEBICAST_BASE_SEL, path: "postcast", webicast: { webinarMinutes: 999 } });
+  assert.equal(serverCompute(sel, null).chargedToday, SERVER_PRICING.POSTCAST_MONTHLY);
 });

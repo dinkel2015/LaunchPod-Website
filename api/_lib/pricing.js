@@ -57,9 +57,40 @@ export const PRICING = {
     { key: "employee",         label: "Employee",          rate: 0.05 },
   ],
   POSTCAST_MONTHLY: 1200,
-  WEBICAST_MONTHLY: 1200,
+  /* Webicast bills monthly by how much content the client sends: each
+     webinar yields about one episode per 15 minutes (never fewer than 2),
+     and the price is a floor for the first 2 episodes plus a flat rate for
+     each episode after that. Above MAX_EPISODES a month it is quoted by
+     hand, so checkout refuses it. Mirrored in portal.html and in the
+     calculator on webicast.html. */
+  WEBICAST: {
+    BASE: 1000,
+    BASE_EPISODES: 2,
+    PER_EXTRA_EPISODE: 250,
+    MAX_EPISODES: 12,
+    MINUTES_PER_EPISODE: 15,
+    MIN_EPISODES_PER_WEBINAR: 2,
+    WEBINAR_MINUTES: [30, 45, 60, 90],
+    WEBINARS_PER_MONTH: [1, 2, 3, 4],
+    RELEASE_CADENCES: ["biweekly", "weekly", "twice"],
+  },
   AUDIT_PRICE_DEFAULT: 1000,
 };
+
+export const WEBICAST_DEFAULTS = { webinarMinutes: 60, webinarsPerMonth: 1, releaseCadence: "weekly" };
+
+/* Episodes produced per month for a Webicast selection. */
+export function webicastEpisodes(wc) {
+  const W = PRICING.WEBICAST;
+  const perWebinar = Math.max(W.MIN_EPISODES_PER_WEBINAR, Math.round(wc.webinarMinutes / W.MINUTES_PER_EPISODE));
+  return perWebinar * wc.webinarsPerMonth;
+}
+
+/* Monthly Webicast price in dollars for a selection. */
+export function webicastMonthly(wc) {
+  const W = PRICING.WEBICAST;
+  return W.BASE + Math.max(0, webicastEpisodes(wc) - W.BASE_EPISODES) * W.PER_EXTRA_EPISODE;
+}
 
 export const PACKAGE_PATHS = ["launch", "postcast", "webicast", "audit"];
 
@@ -145,6 +176,31 @@ export function validateSelection(raw) {
     throw new ValidationError(`invalid paymentPlan: ${raw.paymentPlan}`);
   }
 
+  /* Webicast inputs are only checked on the Webicast path; every other
+     path stores the defaults so the persisted selection keeps one shape. */
+  let webicast = { ...WEBICAST_DEFAULTS };
+  if (path === "webicast") {
+    const wc = raw.webicast || {};
+    const W = PRICING.WEBICAST;
+    webicast = {
+      webinarMinutes: Number(wc.webinarMinutes),
+      webinarsPerMonth: Number(wc.webinarsPerMonth),
+      releaseCadence: wc.releaseCadence,
+    };
+    if (!W.WEBINAR_MINUTES.includes(webicast.webinarMinutes)) {
+      throw new ValidationError(`invalid webicast.webinarMinutes: ${wc.webinarMinutes}`);
+    }
+    if (!W.WEBINARS_PER_MONTH.includes(webicast.webinarsPerMonth)) {
+      throw new ValidationError(`invalid webicast.webinarsPerMonth: ${wc.webinarsPerMonth}`);
+    }
+    if (!W.RELEASE_CADENCES.includes(webicast.releaseCadence)) {
+      throw new ValidationError(`invalid webicast.releaseCadence: ${wc.releaseCadence}`);
+    }
+    if (webicastEpisodes(webicast) > W.MAX_EPISODES) {
+      throw new ValidationError(`webicast plan needs a custom quote: ${webicastEpisodes(webicast)} episodes a month`);
+    }
+  }
+
   return {
     path,
     launch: {
@@ -171,6 +227,7 @@ export function validateSelection(raw) {
         adSpend: Number(boost.adSpend ?? 0),
       },
     },
+    webicast,
     paymentPlan: raw.paymentPlan,
   };
 }
@@ -204,7 +261,7 @@ export function computePricing(sel, promo = null) {
   const launchTotal = launchBase + scriptingCost;
 
   const entryMonthly = path === "postcast" ? PRICING.POSTCAST_MONTHLY
-                     : path === "webicast" ? PRICING.WEBICAST_MONTHLY
+                     : path === "webicast" ? webicastMonthly(sel.webicast)
                      : 0;
   const entryOneTime = path === "audit" ? PRICING.AUDIT_PRICE_DEFAULT : 0;
 

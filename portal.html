@@ -117,9 +117,24 @@ const PRICING = {
   // PropDoc (the proposal tool SDRs use) has no concept of Postcast,
   // Webicast, or Audit at all, so there's no canonical source for these.
   POSTCAST_MONTHLY: 1200,
-  WEBICAST_MONTHLY: 1200,
+  // Webicast bills monthly by how much content the client sends. Must
+  // match api/_lib/pricing.js and the calculator on webicast.html.
+  WEBICAST: {
+    BASE: 1000,
+    BASE_EPISODES: 2,
+    PER_EXTRA_EPISODE: 250,
+    MAX_EPISODES: 12,
+    MINUTES_PER_EPISODE: 15,
+    MIN_EPISODES_PER_WEBINAR: 2,
+    WEBINAR_MINUTES: [30, 45, 60, 90],
+    WEBINARS_PER_MONTH: [1, 2, 3, 4],
+    RELEASE_CADENCES: ["biweekly", "weekly", "twice"],
+  },
   AUDIT_PRICE_DEFAULT: 1000,
 };
+const WEBICAST_CADENCE_LABELS = { biweekly: "Every other week", weekly: "Weekly", twice: "Twice a week" };
+const WEBICAST_CADENCE_PER_MONTH = { biweekly: 2, weekly: 4, twice: 8 };
+const WEBICAST_CUSTOM_URL = "https://calendly.com/dinkel";
 
 function fmt(n) {
   n = Math.round(n || 0);
@@ -139,7 +154,7 @@ function fmtDate(ymd) {
 // STATE
 // ---------------------------------------------------------------------
 const state = {
-  screen: "login", // login | signup | wizard | dashboard
+  screen: "wizard", // login | signup | wizard | dashboard — new visitors start in the wizard; the account is created at checkout
   loginEmail: "", loginPassword: "", loginError: "",
   auth: { name: "", company: "", email: "", password: "", confirm: "", error: "" },
   hasPackage: false, editMode: false,
@@ -154,10 +169,14 @@ const state = {
       production: { enabled: false, freq: 4 },
       boost: { enabled: false, adsPerMo: 1, adSpend: 500 },
     },
+    webicast: { webinarMinutes: 60, webinarsPerMonth: 1, releaseCadence: "weekly" },
     paymentPlan: "monthly", promoCodeInput: "", promoApplied: null, promoError: false,
   },
   tosAccepted: false,
   pay: { name: "", zip: "" }, // card fields intentionally NOT modeled here — see Payment step TODO
+  // Account details for a visitor checking out without an account.
+  // Used once at checkout to create the account, then discarded.
+  account: { name: "", company: "", email: "", password: "" },
   onboarding: { date: null, time: null, booked: false },
   payError: "",
   subscriptionId: null,
@@ -395,7 +414,11 @@ function computePricing() {
   const scriptingCost = pkg.launch.scripting ? PRICING.SCRIPT_RATES_PER_EPISODE[pkg.launch.lengthMin] * pkg.launch.episodes : 0;
   const launchTotal = launchBase + scriptingCost;
 
-  const entryMonthly = path === "postcast" ? PRICING.POSTCAST_MONTHLY : path === "webicast" ? PRICING.WEBICAST_MONTHLY : 0;
+  const W = PRICING.WEBICAST;
+  const wc = pkg.webicast || { webinarMinutes: 60, webinarsPerMonth: 1 };
+  const webicastEpisodes = Math.max(W.MIN_EPISODES_PER_WEBINAR, Math.round(wc.webinarMinutes / W.MINUTES_PER_EPISODE)) * wc.webinarsPerMonth;
+  const webicastMonthly = W.BASE + Math.max(0, webicastEpisodes - W.BASE_EPISODES) * W.PER_EXTRA_EPISODE;
+  const entryMonthly = path === "postcast" ? PRICING.POSTCAST_MONTHLY : path === "webicast" ? webicastMonthly : 0;
   const entryOneTime = path === "audit" ? auditPrice : 0;
 
   const orbitMonthly = path === "launch" ? (PRICING.ORBIT_TIERS[pkg.orbit.tier].monthly + PRICING.HOST_ADDERS[pkg.orbit.voice]) : 0;
@@ -452,7 +475,7 @@ function computePricing() {
     lineItems.push({ label: `Orbit (${PRICING.ORBIT_TIERS[pkg.orbit.tier].label})`, amount: fmt(orbitMonthly) + "/mo" });
   }
   if (path === "postcast") lineItems.push({ label: "Postcast", amount: fmt(entryMonthly) + "/mo" });
-  if (path === "webicast") lineItems.push({ label: "Webicast", amount: fmt(entryMonthly) + "/mo" });
+  if (path === "webicast") lineItems.push({ label: `Webicast (${webicastEpisodes} episodes/mo)`, amount: fmt(entryMonthly) + "/mo" });
   if (path === "audit") lineItems.push({ label: "Podcast Audit (one-time)", amount: fmt(auditPrice) });
   if (web.enabled) lineItems.push({ label: "Web Pod", amount: fmt(webMonthly) + "/mo" });
   if (social.enabled) lineItems.push({ label: `Social Pod (${social.clips} clips)`, amount: fmt(socialMonthly) + "/mo" });
@@ -467,7 +490,7 @@ function computePricing() {
   }
 
   return { launchTotal, entryMonthly, entryOneTime, orbitMonthly, webMonthly, socialMonthly, productionMonthly,
-    boostMgmt, boostAdSpend, recurringTotal, chargedToday, lineItems };
+    boostMgmt, boostAdSpend, recurringTotal, chargedToday, lineItems, webicastEpisodes };
 }
 
 // ---------------------------------------------------------------------
@@ -501,10 +524,10 @@ const labelStyle = `font:700 10px "Space Mono",monospace;letter-spacing:.12em;co
 
 function stepsFor(path) {
   return path === "launch"
-    ? ["path", "launch", "orbit", "pods", "discounts", "review", "tos", "payment", "success"]
-    : ["path", "entry", "pods", "discounts", "review", "tos", "payment", "success"];
+    ? ["path", "launch", "orbit", "pods", "discounts", "review", "payment", "success"]
+    : ["path", "entry", "pods", "discounts", "review", "payment", "success"];
 }
-const STEP_LABELS = { path: "Choose path", launch: "Configure Launch", entry: "Configure package", orbit: "Choose Orbit", pods: "Add Pods", discounts: "Discounts", review: "Review", tos: "Terms", payment: "Payment", success: "Done" };
+const STEP_LABELS = { path: "Choose path", launch: "Configure Launch", entry: "Configure package", orbit: "Choose Orbit", pods: "Add Pods", discounts: "Discounts", review: "Review", tos: "Terms", payment: "Checkout", success: "Done" };
 
 // ---------------------------------------------------------------------
 // SCREEN: AUTH
@@ -538,7 +561,7 @@ function renderLoginForm() {
         <input type="password" id="loginPassword" placeholder="••••••••" value="${state.loginPassword}" style="${inputStyle}"/></div>
       ${state.loginError ? `<div style="font:500 13px 'Instrument Sans',sans-serif;color:#FF2EA0">${state.loginError}</div>` : ""}
       <button data-action="doLogin" style="margin-top:8px;border:none;cursor:pointer;font:600 15px 'Instrument Sans',sans-serif;color:#08060f;padding:14px;border-radius:100px;background:#fff">Sign in</button>
-      <div style="text-align:center;font:400 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:8px">New to LPM? <a href="#" data-action="goSignup" style="color:#12C8D8;font-weight:600">Create an account</a></div>
+      <div style="text-align:center;font:400 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:8px">New to LPM? <a href="#" data-action="goWizard" style="color:#12C8D8;font-weight:600">Choose a package</a> — your account is set up at checkout.</div>
     </div>`;
 }
 function renderSignupForm() {
@@ -571,8 +594,11 @@ function renderTopBar() {
       <span style="font:500 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6)">Client Portal</span>
     </div>
     <div style="display:flex;align-items:center;gap:16px">
-      <span style="font:500 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55)">${state.loginEmail || state.auth.email}</span>
-      <button data-action="doLogout" style="cursor:pointer;font:500 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.7);padding:9px 16px;border-radius:100px;border:1px solid rgba(255,255,255,.18);background:transparent">Log out</button>
+      ${backend.session ? `
+      <span style="font:500 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55)">${escapeHtml(state.loginEmail || state.auth.email || backend.session.user?.email || "")}</span>
+      <button data-action="doLogout" style="cursor:pointer;font:500 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.7);padding:9px 16px;border-radius:100px;border:1px solid rgba(255,255,255,.18);background:transparent">Log out</button>` : `
+      <span style="font:500 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55)">Already a client?</span>
+      <button data-action="goLogin" style="cursor:pointer;font:500 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.7);padding:9px 16px;border-radius:100px;border:1px solid rgba(255,255,255,.18);background:transparent">Sign in</button>`}
     </div>
   </div>`;
 }
@@ -599,8 +625,11 @@ function renderWizard() {
 
   const showSummary = stepId !== "success";
   const showNav = stepId !== "success";
-  const nextDisabled = (stepId === "path" && !path) || (stepId === "tos" && !state.tosAccepted);
-  const nextLabel = stepId === "tos" ? "Continue to payment" : stepId === "payment" ? "Pay & confirm" : stepId === "review" ? "Accept & continue" : "Continue →";
+  const webicastCustom = path === "webicast" && p.webicastEpisodes > PRICING.WEBICAST.MAX_EPISODES;
+  const nextDisabled = (stepId === "path" && !path)
+    || (stepId === "payment" && !state.tosAccepted)
+    || (webicastCustom && stepId !== "path");
+  const nextLabel = stepId === "payment" ? "Pay & confirm" : stepId === "review" ? "Continue to checkout" : "Continue →";
 
   return `
   ${renderTopBar()}
@@ -640,7 +669,7 @@ function renderStepPath() {
   const paths = [
     { key: "launch", label: "Full Launch System", tag: "FULL BUILD", desc: "Strategy, brand, recording, distribution — built from scratch over 6–8 weeks." },
     { key: "postcast", label: "Postcast", tag: fmt(PRICING.POSTCAST_MONTHLY) + "/MO FLAT", desc: "Your best blog content, remixed into a real audio show — one flat monthly rate." },
-    { key: "webicast", label: "Webicast", tag: fmt(PRICING.WEBICAST_MONTHLY) + "/MO FLAT", desc: "Turn an existing webinar recording into a polished podcast — one flat monthly rate." },
+    { key: "webicast", label: "Webicast", tag: "FROM " + fmt(PRICING.WEBICAST.BASE) + "/MO", desc: "Turn your existing webinar recordings into a polished podcast — billed monthly by how much content you send." },
     { key: "audit", label: "Podcast Audit", tag: fmt(auditPrice) + " ONE-TIME", desc: "A flat-fee, standalone review of your existing show — no recurring commitment." },
   ];
   const selected = paths.find(o => o.key === state.pkg.path) || paths[0];
@@ -702,15 +731,50 @@ function renderStepLaunch() {
 function renderStepEntry() {
   const path = state.pkg.path;
   const title = path === "postcast" ? "Configure Postcast." : path === "webicast" ? "Configure Webicast." : "Podcast Audit.";
-  const desc = path === "postcast" || path === "webicast" ? "One flat monthly rate." : "A one-time flat fee — no recurring commitment.";
+  const desc = path === "postcast" ? "One flat monthly rate." : path === "webicast" ? "Tell us how much you send each month. Your monthly price follows the episodes we produce." : "A one-time flat fee — no recurring commitment.";
   let card = "";
   if (path === "postcast") card = `<div style="padding:24px;border-radius:16px;background:rgba(18,200,216,.1);border:1px solid rgba(18,200,216,.4)"><div style="display:flex;align-items:baseline;gap:10px"><div style="font:600 18px 'Space Grotesk',sans-serif">Postcast</div><div style="font:600 24px 'Space Grotesk',sans-serif">${fmt(PRICING.POSTCAST_MONTHLY)}<span style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo flat</span></div></div><div style="font:400 14px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin-top:8px">Your best blog and written content, remixed into a real audio show.</div></div>`;
-  if (path === "webicast") card = `<div style="padding:24px;border-radius:16px;background:rgba(110,43,242,.1);border:1px solid rgba(110,43,242,.4)"><div style="display:flex;align-items:baseline;gap:10px"><div style="font:600 18px 'Space Grotesk',sans-serif">Webicast</div><div style="font:600 24px 'Space Grotesk',sans-serif">${fmt(PRICING.WEBICAST_MONTHLY)}<span style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo flat</span></div></div><div style="font:400 14px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin-top:8px">Turn your existing webinar recordings into a polished podcast.</div></div>`;
+  if (path === "webicast") card = renderWebicastConfig();
   if (path === "audit") card = `<div style="padding:24px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.14)"><div style="display:flex;align-items:baseline;gap:10px"><div style="font:600 18px 'Space Grotesk',sans-serif">Podcast Audit</div><div style="font:600 24px 'Space Grotesk',sans-serif">${fmt(auditPrice)}<span style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)"> one-time</span></div></div><div style="font:400 14px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin-top:8px">A one-time, flat-fee review of your existing show.</div></div>`;
   return `
     <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">${title}</h2>
     <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 28px;max-width:520px">${desc}</p>
     ${card}`;
+}
+
+function renderWebicastConfig() {
+  const W = PRICING.WEBICAST, wc = state.pkg.webicast;
+  const p = computePricing();
+  const eps = p.webicastEpisodes;
+  const custom = eps > W.MAX_EPISODES;
+  const release = WEBICAST_CADENCE_PER_MONTH[wc.releaseCadence];
+  const fit = eps === release
+    ? `Your recordings fill your release schedule exactly: ${eps} episodes made, ${release} released each month.`
+    : eps > release
+      ? `You'll make ${eps} episodes a month but release ${release}. The extra ${eps - release} build a backlog for months you don't record.`
+      : `You'll make ${eps} episodes a month, but this schedule needs ${release}. Record more, or release less often, to keep the feed full.`;
+  const label = (t) => `<div style="font:700 11px 'Space Mono',monospace;letter-spacing:.14em;color:rgba(255,255,255,.5);margin-bottom:10px">${t}</div>`;
+  return `
+    ${label("WEBINAR LENGTH")}
+    <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px">
+      ${W.WEBINAR_MINUTES.map(m => `<div data-action="setWebicastMinutes" data-value="${m}" style="${pill(wc.webinarMinutes === m)}">${m} min</div>`).join("")}
+    </div>
+    ${label("WEBINARS PER MONTH")}
+    <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px">
+      ${W.WEBINARS_PER_MONTH.map(n => `<div data-action="setWebicastPerMonth" data-value="${n}" style="${pill(wc.webinarsPerMonth === n)}">${n} a month</div>`).join("")}
+    </div>
+    ${label("RELEASE SCHEDULE")}
+    <div class="lpm-opt-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px">
+      ${W.RELEASE_CADENCES.map(c => `<div data-action="setWebicastCadence" data-value="${c}" style="${pill(wc.releaseCadence === c)}">${WEBICAST_CADENCE_LABELS[c]}</div>`).join("")}
+    </div>
+    <div style="padding:24px;border-radius:16px;background:rgba(110,43,242,.1);border:1px solid rgba(110,43,242,.4)">
+      ${custom ? `
+        <div style="font:600 18px 'Space Grotesk',sans-serif">That's a custom plan</div>
+        <div style="font:400 14px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.7);margin-top:8px">More than ${W.MAX_EPISODES} episodes a month is quoted by hand. <a href="${WEBICAST_CUSTOM_URL}" target="_blank" rel="noopener" style="color:#12C8D8;font-weight:600">Book a quick call</a> and we'll scope it with you.</div>` : `
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap"><div style="font:600 18px 'Space Grotesk',sans-serif">Webicast</div><div style="font:600 24px 'Space Grotesk',sans-serif">${fmt(p.entryMonthly)}<span style="font:400 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.5)">/mo</span></div></div>
+        <div style="font:400 14px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.7);margin-top:8px">${eps} episodes a month from ${wc.webinarMinutes * wc.webinarsPerMonth} minutes of content · ${fmt(p.entryMonthly / eps)} per episode.</div>
+        <div style="font:400 13px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.55);margin-top:10px">${fit}</div>`}
+    </div>`;
 }
 
 function renderStepOrbit() {
@@ -1026,28 +1090,54 @@ function renderStepTos() {
 }
 
 function renderStepPayment() {
-  /* Card fields are mounted into #square-card-container by
+  /* Checkout: account (for new visitors), terms, and card on one screen.
+     Card fields are mounted into #square-card-container by
      mountSquareCard(), called from render() whenever this step is on
      screen. The fields live inside Square's own iframe, so raw card data
      never touches this origin or this file. Tokenization happens on
-     "Next" (see handleAction -> goNext), and the charge itself is made
-     server-side by /api/checkout with the secret access token. */
-  return `
-    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">Payment.</h2>
-    <p style="font:400 15px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 24px">Securely processed by Square. Your card is saved for recurring monthly billing.</p>
-    <div style="max-width:440px;padding:26px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1)">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
-        <span style="font:700 12px 'Space Mono',monospace;letter-spacing:.1em;color:rgba(255,255,255,.55)">CARD DETAILS</span>
-        <span style="font:600 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.45)">Powered by Square</span>
-      </div>
+     "Pay & confirm" (see handleAction -> goNext), and the charge itself
+     is made server-side by /api/checkout with the secret access token. */
+  const path = state.pkg.path;
+  const a = state.account;
+  const box = `max-width:520px;padding:26px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);margin-bottom:18px`;
+  const heading = (t, right) => `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px"><span style="font:700 12px 'Space Mono',monospace;letter-spacing:.1em;color:rgba(255,255,255,.55)">${t}</span>${right || ""}</div>`;
+  const pendingNote = path !== "launch"
+    ? `<div style="font:600 12px 'Instrument Sans',sans-serif;color:#FF2EA0;margin-bottom:12px">A few sections below are adapted for this package type and still need a quick confirm from counsel — flagged inline.</div>`
+    : "";
+  const accountBox = backend.session ? "" : `
+    <div style="${box}">
+      ${heading("YOUR ACCOUNT", `<a href="#" data-action="goLogin" style="font:600 13px 'Instrument Sans',sans-serif;color:#12C8D8">Already a client? Sign in</a>`)}
       <div style="display:flex;flex-direction:column;gap:12px">
-        <input type="text" id="payName" placeholder="Name on card" value="${state.pay.name}" style="${inputStyle}"/>
-        <div id="square-card-container" style="padding:14px;border-radius:10px;background:rgba(255,255,255,.04);border:1px dashed rgba(255,255,255,.25);color:rgba(255,255,255,.4);font:400 13px 'Instrument Sans',sans-serif">Square Web Payments SDK mounts here (not yet connected — see code comment).</div>
-        <input type="text" id="payZip" placeholder="Billing ZIP" value="${state.pay.zip}" style="${inputStyle}"/>
+        <input type="text" id="acctName" autocomplete="name" placeholder="Full name" value="${escapeHtml(a.name)}" style="${inputStyle}"/>
+        <input type="text" id="acctCompany" autocomplete="organization" placeholder="Company" value="${escapeHtml(a.company)}" style="${inputStyle}"/>
+        <input type="email" id="acctEmail" autocomplete="email" placeholder="you@company.com" value="${escapeHtml(a.email)}" style="${inputStyle}"/>
+        <input type="password" id="acctPassword" autocomplete="new-password" placeholder="Create a password (8+ characters)" style="${inputStyle}"/>
       </div>
-      ${state.payError ? `<div style="margin-top:16px;padding:12px 14px;border-radius:10px;background:rgba(255,46,160,.12);border:1px solid rgba(255,46,160,.45);font:500 13px 'Instrument Sans',sans-serif;color:#FF2EA0">${state.payError}</div>` : ""}
-      <div style="display:flex;align-items:center;gap:8px;margin-top:16px;font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.4)"><span>🔒</span>Card data handled entirely by Square — never touches LPM servers.</div>
+      <div style="font:400 12px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.45);margin-top:12px">You'll use this to sign in to your dashboard.</div>
     </div>`;
+  return `
+    <h2 style="font:600 34px/1.1 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 10px">Checkout.</h2>
+    <p style="font:400 15px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.6);margin:0 0 24px">Securely processed by Square. Your card is saved for recurring monthly billing.</p>
+    ${accountBox}
+    <div style="${box}">
+      ${heading("CARD DETAILS", `<span style="font:600 13px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.45)">Powered by Square</span>`)}
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <input type="text" id="payName" autocomplete="cc-name" placeholder="Name on card" value="${escapeHtml(state.pay.name)}" style="${inputStyle}"/>
+        <div id="square-card-container" style="padding:14px;border-radius:10px;background:rgba(255,255,255,.04);border:1px dashed rgba(255,255,255,.25);color:rgba(255,255,255,.4);font:400 13px 'Instrument Sans',sans-serif">Square Web Payments SDK mounts here (not yet connected — see code comment).</div>
+        <input type="text" id="payZip" autocomplete="postal-code" placeholder="Billing ZIP" value="${escapeHtml(state.pay.zip)}" style="${inputStyle}"/>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:16px;font:400 12px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.4)"><span>🔒</span>Card data handled entirely by Square — never touches LPM servers.</div>
+    </div>
+    <div style="${box}">
+      ${heading("TERMS OF SERVICE", `<span style="font:700 10px 'Space Mono',monospace;letter-spacing:.08em;color:rgba(255,255,255,.4)">REV. ${TOS_REV}</span>`)}
+      ${pendingNote}
+      <div style="height:200px;overflow-y:auto;padding:18px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);font:400 13px/1.7 'Instrument Sans',sans-serif;color:rgba(255,255,255,.62);margin-bottom:16px">${renderTosDocument(path)}</div>
+      <div data-action="toggleTosAccept" role="checkbox" aria-checked="${state.tosAccepted}" tabindex="0" style="display:flex;align-items:flex-start;gap:12px;cursor:pointer">
+        <div style="flex:none;width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font:700 13px sans-serif;border:1px solid ${state.tosAccepted ? "#12C8D8" : "rgba(255,255,255,.3)"};background:${state.tosAccepted ? "#12C8D8" : "transparent"};color:#08060f">${state.tosAccepted ? "✓" : ""}</div>
+        <div style="font:400 14px/1.5 'Instrument Sans',sans-serif;color:rgba(255,255,255,.78)">I have read and agree to the Terms of Service and authorize LPM to charge the payment method provided, including recurring monthly charges once services begin.</div>
+      </div>
+    </div>
+    ${state.payError ? `<div style="max-width:520px;padding:12px 14px;border-radius:10px;background:rgba(255,46,160,.12);border:1px solid rgba(255,46,160,.45);font:500 13px 'Instrument Sans',sans-serif;color:#FF2EA0">${escapeHtml(state.payError)}</div>` : ""}`;
 }
 
 function renderStepSuccess(p) {
@@ -1055,7 +1145,7 @@ function renderStepSuccess(p) {
     <div style="text-align:center;padding:40px 0;max-width:480px;margin:0 auto">
       <div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(140deg,#FF2EA0,#6E2BF2 55%,#12C8D8);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;font-size:28px">✓</div>
       <h2 style="font:600 30px 'Space Grotesk',sans-serif;letter-spacing:-.02em;margin:0 0 12px">You're booked in.</h2>
-      <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.65);margin:0 0 30px">${fmt(state.chargedTodayCents != null ? state.chargedTodayCents / 100 : p.chargedToday)} was processed today. Next, grab a time for your onboarding call so we can kick things off.</p>
+      <p style="font:400 16px/1.6 'Instrument Sans',sans-serif;color:rgba(255,255,255,.65);margin:0 0 30px">${fmt(state.chargedTodayCents != null ? state.chargedTodayCents / 100 : p.chargedToday)} was processed today. Your account is ready — sign in any time at launchpod.media/portal with ${escapeHtml(state.loginEmail || "your email")}. Next, grab a time for your onboarding call so we can kick things off.</p>
       <button data-action="goToDashboard" style="border:none;cursor:pointer;font:600 15px 'Instrument Sans',sans-serif;color:#08060f;padding:15px 30px;border-radius:100px;background:#fff">Go to my dashboard →</button>
     </div>`;
 }
@@ -1179,6 +1269,10 @@ function bindEvents() {
   bindInput("boostAdSpend", "pkg.pods.boost.adSpend");
   bindInput("promoCodeInput", "pkg.promoCodeInput");
   bindInput("payName", "pay.name");
+  bindInput("acctName", "account.name");
+  bindInput("acctCompany", "account.company");
+  bindInput("acctEmail", "account.email");
+  bindInput("acctPassword", "account.password");
   bindInput("payZip", "pay.zip");
 }
 
@@ -1205,12 +1299,53 @@ async function withBusy(fn, onError) {
   }
 }
 
+/* Account at checkout. A new visitor's account is created (or, if it
+   already exists from an earlier declined attempt, signed into) before
+   the card is charged, so /api/checkout always runs as a signed-in user
+   and the subscription, TOS record and ClickUp workspace attach to it. */
+async function ensureAccount() {
+  const a = state.account;
+  // Inputs sync on change; read them directly so a field still focused
+  // when "Pay & confirm" is pressed is not missed.
+  ["Name", "Company", "Email", "Password"].forEach((f) => {
+    const el = root.querySelector("#acct" + f);
+    if (el) a[f.toLowerCase()] = el.value;
+  });
+  a.email = a.email.trim();
+  if (!a.name.trim() || !a.company.trim() || !a.email || !a.password) throw new Error("Fill in your name, company, email, and a password.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email)) throw new Error("Enter a valid email address.");
+  if (a.password.length < 8) throw new Error("Your password needs at least 8 characters.");
+
+  const res = await fetch("/api/account", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: a.name.trim(), company: a.company.trim(), email: a.email, password: a.password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && res.status !== 409) throw new Error(data.error || "We couldn't create your account. Please try again.");
+
+  try {
+    const session = await authFetch("token?grant_type=password", { email: a.email, password: a.password });
+    saveSession(session);
+  } catch {
+    throw new Error(res.status === 409
+      ? "An account with this email already exists. Sign in to continue, or use a different email."
+      : "Your account was created, but we couldn't sign you in. Please sign in to finish checking out.");
+  }
+  state.loginEmail = a.email;
+  a.password = "";
+}
+
 async function handleAction(action, value) {
   const pkg = state.pkg;
   if (backend.busy) return;
   switch (action) {
     case "goLogin": state.screen = "login"; state.loginError = ""; break;
     case "goSignup": state.screen = "signup"; break;
+    case "goWizard": state.screen = "wizard"; state.loginError = ""; break;
+    case "setWebicastMinutes": pkg.webicast.webinarMinutes = Number(value); break;
+    case "setWebicastPerMonth": pkg.webicast.webinarsPerMonth = Number(value); break;
+    case "setWebicastCadence": pkg.webicast.releaseCadence = value; break;
     case "doLogin": {
       if (!state.loginEmail || !state.loginPassword) { state.loginError = "Enter your email and password."; break; }
       state.loginError = "";
@@ -1306,11 +1441,12 @@ async function handleAction(action, value) {
         const price = computePricing();
         let ok = false;
         await withBusy(async () => {
+          if (!backend.session) await ensureAccount();
           const { sourceId, verificationToken } = await tokenizeCard(Math.round(price.chargedToday * 100));
           const result = await api("/api/checkout", {
             selection: {
               path: pkg.path, launch: pkg.launch, orbit: pkg.orbit,
-              pods: pkg.pods, paymentPlan: pkg.paymentPlan,
+              pods: pkg.pods, webicast: pkg.webicast, paymentPlan: pkg.paymentPlan,
             },
             promoCode: pkg.promoApplied ? pkg.promoApplied.code : null,
             sourceId, verificationToken,
@@ -1363,6 +1499,17 @@ function applyPathFromQuery() {
   state.pkg.path = wanted;
   // Skip "Choose path" only because the choice was already made for them.
   state.wizardStep = 1;
+
+  /* The Webicast page's calculator links in with the plan the visitor
+     built, e.g. ?path=webicast&minutes=60&perMonth=1&cadence=weekly.
+     Each value is checked against the options before it is used. */
+  if (wanted === "webicast") {
+    const q = new URLSearchParams(location.search), W = PRICING.WEBICAST, wc = state.pkg.webicast;
+    const minutes = Number(q.get("minutes")), perMonth = Number(q.get("perMonth")), cadence = q.get("cadence");
+    if (W.WEBINAR_MINUTES.includes(minutes)) wc.webinarMinutes = minutes;
+    if (W.WEBINARS_PER_MONTH.includes(perMonth)) wc.webinarsPerMonth = perMonth;
+    if (W.RELEASE_CADENCES.includes(cadence)) wc.releaseCadence = cadence;
+  }
 }
 
 async function boot() {
