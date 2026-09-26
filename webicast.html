@@ -50,17 +50,6 @@
     .grid2>*,.calc>*,.value-grid>*,.results>*{min-width:0}
     @media(min-width:900px){.grid2{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:56px}}
 
-    /* nav */
-    .nav{position:sticky;top:0;z-index:20;background:rgba(8,6,15,.85);backdrop-filter:blur(10px);border-bottom:1px solid #1d1830}
-    .nav .wrap{height:72px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-    .nav-links{display:none;gap:28px;font-size:15px;color:var(--muted)}
-    .nav-links a[aria-current]{color:var(--text);font-weight:600}
-    @media(min-width:900px){.nav-links{display:flex}}
-    .nav-right{display:flex;align-items:center;gap:16px}
-    .nav-price{display:none;font:400 13px 'Space Mono',monospace;color:var(--muted)}
-    @media(min-width:700px){.nav-price{display:inline}}
-    .nav .btn{height:42px;padding:0 20px;font-size:15px}
-
     /* hero */
     .hero{padding-top:64px}
     .hero h1{font-size:clamp(44px,7vw,76px)}
@@ -189,29 +178,68 @@
     footer nav{display:flex;gap:64px}
     footer nav div{display:flex;flex-direction:column;gap:10px}
     footer nav span{font:400 12px 'Space Mono',monospace;color:var(--dim)}
-    .logo{font:700 20px 'Space Grotesk',sans-serif;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+    .footer-logo{height:24px;width:auto;display:block}
   </style>
 </head>
 <body>
 
-<header class="nav">
-  <div class="wrap">
-    <div style="display:flex;align-items:center;gap:44px">
-      <a href="/" class="logo" aria-label="LaunchPod Media home">LPM</a>
-      <nav class="nav-links" aria-label="Main">
-        <a href="/launch">Launch</a>
-        <a href="/pods">Pods</a>
-        <a href="/webicast" aria-current="page">Webicast</a>
-        <a href="/postcast">Postcast</a>
-        <a href="/resources">Resources</a>
-      </nav>
-    </div>
-    <div class="nav-right">
-      <span class="nav-price">From $1,000/mo</span>
-      <a href="#pricing" class="btn btn-grad">Get started</a>
-    </div>
+<!-- site-nav:start (generated from partials/site-nav.html by scripts/build-content.mjs) -->
+<style>
+  .lpm-bar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:20px 56px;background:rgba(8,6,15,.72);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border-bottom:1px solid rgba(255,255,255,.07)}
+  .lpm-bar-left{display:flex;align-items:center;gap:44px}
+  .lpm-bar-logo{display:inline-flex;align-items:center}
+  .lpm-bar-logo img{height:26px;width:auto;display:block}
+  .lpm-bar-links{display:flex;gap:30px;font:500 14px 'Instrument Sans',sans-serif;color:rgba(255,255,255,.72)}
+  .lpm-bar-links a{color:inherit;text-decoration:none}
+  .lpm-bar-links a[aria-current]{color:#fff}
+  .lpm-bar-cta{display:inline-flex;align-items:center;gap:9px;font:600 14px 'Instrument Sans',sans-serif;color:#fff;text-decoration:none;padding:11px 20px;border-radius:100px;background:linear-gradient(95deg,#FF2EA0,#6E2BF2 60%,#12C8D8);box-shadow:0 8px 30px -8px rgba(110,43,242,.7)}
+  .lpm-bar-cta span{font-size:15px}
+  .lpm-bar-burger{display:none;flex-direction:column;gap:5px;width:44px;height:44px;align-items:center;justify-content:center;border-radius:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);cursor:pointer;flex:none}
+  .lpm-bar-burger span{width:18px;height:2px;background:#fff;border-radius:2px}
+  .lpm-drawer[hidden]{display:none}
+  .lpm-drawer-scrim{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:60}
+  .lpm-drawer-panel{position:fixed;top:0;right:0;bottom:0;width:80%;max-width:320px;background:#0d0a18;z-index:61;padding:26px 22px;display:flex;flex-direction:column;box-shadow:-24px 0 60px rgba(0,0,0,.5);animation:lpmDrawerIn .22s ease-out both;overflow-y:auto}
+  .lpm-drawer-close{align-self:flex-end;margin-bottom:10px;width:36px;height:36px;border-radius:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);color:#fff;font-size:16px;cursor:pointer}
+  .lpm-drawer-panel a{padding:16px 4px;font:500 17px 'Instrument Sans',sans-serif;color:#fff;text-decoration:none;border-bottom:1px solid rgba(255,255,255,.08)}
+  .lpm-drawer-panel a.lpm-bar-cta{margin-top:20px;justify-content:center;padding:15px 20px;font-size:15px;border:0;box-shadow:none}
+  @keyframes lpmDrawerIn{0%{transform:translateX(28px);opacity:0}100%{transform:translateX(0);opacity:1}}
+  @media (prefers-reduced-motion:reduce){.lpm-drawer-panel{animation:none}}
+  @media (max-width:1024px){
+    .lpm-bar{padding:14px 16px}
+    .lpm-bar-links,.lpm-bar-left+.lpm-bar-cta{display:none}
+    .lpm-bar-burger{display:flex}
+  }
+</style>
+<header class="lpm-bar">
+  <div class="lpm-bar-left">
+    <a href="/" class="lpm-bar-logo" aria-label="LaunchPod Media home"><img src="/assets/lpm-logo.png" alt="LPM" width="41" height="26"></a>
+    <nav class="lpm-bar-links" aria-label="Main">
+      <a href="/launch">Launch</a><a href="/pods">Pods</a><a href="/webicast" aria-current="page">Webicast</a><a href="/postcast">Postcast</a><a href="/resources">Resources</a>
+    </nav>
   </div>
+  <a href="#pricing" class="lpm-bar-cta">Get started <span aria-hidden="true">→</span></a>
+  <button type="button" class="lpm-bar-burger" aria-label="Menu" aria-expanded="false" aria-controls="lpm-drawer"><span></span><span></span><span></span></button>
 </header>
+<div class="lpm-drawer" id="lpm-drawer" hidden>
+  <div class="lpm-drawer-scrim"></div>
+  <nav class="lpm-drawer-panel" aria-label="Menu">
+    <button type="button" class="lpm-drawer-close" aria-label="Close">✕</button>
+    <a href="/launch">Launch</a><a href="/pods">Pods</a><a href="/webicast">Webicast</a><a href="/postcast">Postcast</a><a href="/resources">Resources</a>
+    <a href="#pricing" class="lpm-bar-cta">Get started →</a>
+  </nav>
+</div>
+<script>
+(function () {
+  var burger = document.querySelector(".lpm-bar-burger"), drawer = document.getElementById("lpm-drawer");
+  function set(open) { drawer.hidden = !open; burger.setAttribute("aria-expanded", String(open)); }
+  burger.addEventListener("click", function () { set(drawer.hidden); });
+  drawer.addEventListener("click", function (e) {
+    if (e.target.closest(".lpm-drawer-close, .lpm-drawer-scrim, a")) set(false);
+  });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !drawer.hidden) { set(false); burger.focus(); } });
+})();
+</script>
+<!-- site-nav:end -->
 
 <main>
 <section class="hero">
@@ -394,7 +422,7 @@
 
 <footer>
   <div class="wrap">
-    <div><span class="logo">LPM</span><p>LaunchPod Media. Podcasts built to grow — telling stories and elevating voices.</p></div>
+    <div><img class="footer-logo" src="/assets/lpm-logo.png" alt="LPM" width="38" height="24"><p>LaunchPod Media. Podcasts built to grow — telling stories and elevating voices.</p></div>
     <nav aria-label="Footer">
       <div><span>Services</span><a href="/launch">Launch</a><a href="/pods">Pods</a><a href="/webicast">Webicast</a><a href="/postcast">Postcast</a></div>
       <div><span>Company</span><a href="/">Home</a><a href="/resources">Resources</a></div>
