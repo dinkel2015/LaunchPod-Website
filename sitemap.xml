@@ -10,4 +10,8 @@
   <url><loc>https://www.launchpodmedia.com/webicast</loc></url>
   <url><loc>https://www.launchpodmedia.com/postcast</loc></url>
   <url><loc>https://www.launchpodmedia.com/resources</loc></url>
+  <!-- content:start -->
+  <url><loc>https://www.launchpodmedia.com/blog</loc></url>
+  <url><loc>https://www.launchpodmedia.com/industries</loc></url>
+<!-- content:end -->
 </urlset>

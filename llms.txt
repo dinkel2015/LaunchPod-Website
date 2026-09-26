@@ -1,0 +1,31 @@
+# LaunchPod Media
+
+> LaunchPod Media builds branded podcasts for businesses. It handles the strategy, branding, content pipeline and distribution that give a show its first six months of momentum, then offers add-on services ("Pods") for advertising, video, social and web content. Its site is https://www.launchpodmedia.com.
+
+Most pages on this site render with JavaScript. The pages under /blog and /industries are plain HTML and can be read without running scripts.
+
+## Services
+
+- [Launch](https://www.launchpodmedia.com/launch): The Launch system for starting a podcast that builds authority, drives conversations, and grows with the business.
+- [Pods](https://www.launchpodmedia.com/pods): Modular services. Start with the essentials, then add what moves the needle.
+- [Boost Pod](https://www.launchpodmedia.com/boost-pod): Strategic podcast advertising with native ads across Meta, TikTok and Instagram.
+- [Production Pod](https://www.launchpodmedia.com/production-pod): Video production with color grading, animation, titling and platform-native formats, recorded in one of its 30+ studios, the client's space, or remotely.
+- [Social Pod](https://www.launchpodmedia.com/social-pod): Turns long-form podcast content into platform-ready social media assets.
+- [Web Pod](https://www.launchpodmedia.com/web-pod): Turns a podcast into searchable web content: blog posts, transcripts, embedded players and videos, optimized for Google and AI search.
+- [Webicast](https://www.launchpodmedia.com/webicast): Turns a webinar recording the client has already run into a slate of podcast episodes. Priced monthly by episode count.
+- [Postcast](https://www.launchpodmedia.com/postcast): Turns a client's best-performing written content into a produced podcast episode.
+
+<!-- content:start -->
+## Blog
+
+- [Blog index](https://www.launchpodmedia.com/blog): Articles from LaunchPod Media on podcast strategy, production, distribution and growth.
+
+## Industries
+
+- [Industries index](https://www.launchpodmedia.com/industries): How LaunchPod Media approaches branded podcasts for specific industries.
+<!-- content:end -->
+
+## Optional
+
+- [Home](https://www.launchpodmedia.com/)
+- [Resources](https://www.launchpodmedia.com/resources)

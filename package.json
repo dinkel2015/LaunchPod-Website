@@ -4,7 +4,8 @@
   "type": "module",
   "description": "Serverless functions for the LaunchPod Media client portal. The site itself is static HTML; this package exists only for /api.",
   "scripts": {
-    "test": "node --test api/_lib/*.test.mjs",
+    "test": "node --test api/_lib/*.test.mjs && node scripts/build-content.mjs --check",
+    "build:content": "node scripts/build-content.mjs",
     "e2e": "node --env-file=.env scripts/e2e.mjs"
   },
   "dependencies": {
@@ -13,5 +14,8 @@
   },
   "engines": {
     "node": "22.x"
+  },
+  "devDependencies": {
+    "marked": "^15.0.12"
   }
 }
