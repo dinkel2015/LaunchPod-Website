@@ -2,7 +2,7 @@
 
 > LaunchPod Media builds branded podcasts for businesses. It handles the strategy, branding, content pipeline and distribution that give a show its first six months of momentum, then offers add-on services ("Pods") for advertising, video, social and web content. Its site is https://www.launchpodmedia.com.
 
-Most pages on this site render with JavaScript. The pages under /blog and /industries are plain HTML and can be read without running scripts.
+Every page listed here serves its text as plain HTML and can be read without running JavaScript.
 
 ## Services
 

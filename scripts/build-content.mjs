@@ -32,6 +32,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Marked } from "marked";
+import { BUNDLE_PAGES, templateHash } from "./prerender-bundles.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ORIGIN = "https://www.launchpodmedia.com";
@@ -428,6 +429,12 @@ if (CHECK) {
     const dir = join(ROOT, section.id);
     if (!existsSync(dir)) continue;
     for (const f of await readdir(dir)) if (!files.has(`${section.id}/${f}`)) stale.push(`${section.id}/${f} (no source)`);
+  }
+  // Bundled pages carry a crawlable copy stamped with their template's hash.
+  for (const page of BUNDLE_PAGES) {
+    const html = await readFile(join(ROOT, page), "utf8");
+    const m = html.match(/<!-- prerender:start template=([0-9a-f]+)/);
+    if (!m || m[1] !== templateHash(html)) stale.push(`${page} (run: node scripts/prerender-bundles.mjs ${page})`);
   }
   if (stale.length) {
     console.error(`Generated content is stale. Run: npm run build:content\n  ${stale.join("\n  ")}`);

@@ -2,8 +2,10 @@
 
 Everything under `/blog/` and `/industries/` is generated from the Markdown
 here into plain HTML, so crawlers and AI fetch tools can read it without
-running JavaScript. (The rest of the site is JS bundles that show only
-"Unpacking..." to a plain HTTP fetch.)
+running JavaScript. (The other marketing pages are JS bundles; their
+crawlable copy comes from `scripts/prerender-bundles.mjs` instead. Re-run
+it on any bundle page you change. `npm test` flags the ones that are out
+of date.)
 
 1. Add `content/blog/<slug>.md` or `content/industries/<slug>.md`. The file
    name becomes the URL: `content/industries/credit-unions.md` →
